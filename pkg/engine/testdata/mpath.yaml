@@ -1,0 +1,25 @@
+workflows:
+  - name: example
+    steps:
+      - name: s1
+        task: task1
+      - name: s2
+        task: task2
+      - name: s3
+        task: task1
+        depends: [s2]
+      - name: __end__
+        depends: [s1, s3]
+    tasks:
+      - name: task1
+        itemListKey: k1
+        steps:
+          - name: s1
+          - name: __end__
+            depends: [ s1 ]
+      - name: task2
+        itemListKey: k1
+        steps:
+          - name: s1
+          - name: __end__
+            depends: [ s1 ]

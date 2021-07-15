@@ -1,0 +1,2 @@
+workflows:
+ - name: bogus/pocus

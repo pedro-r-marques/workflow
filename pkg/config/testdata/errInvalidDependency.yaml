@@ -1,0 +1,17 @@
+workflows:
+  - name: test1
+    steps:
+      - name: s1
+      - name: s2
+        task: st1
+        depends: [ s3 ]
+      - name: s3
+        depends: [ s2 ]
+      - name: __end__
+        depends: [ s2 ]
+    
+    tasks:
+      - name: st1
+        itemListKey: k1
+        steps:
+          - name: __end__

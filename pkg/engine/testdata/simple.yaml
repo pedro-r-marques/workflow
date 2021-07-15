@@ -1,0 +1,12 @@
+workflows:
+  - name: test1
+    steps:
+      - name: s1
+      - name: s2
+        depends: [s1]
+      - name: s3
+        depends: [s1]
+      - name: s4
+        depends: [s3]
+      - name: __end__
+        depends: [s2, s4]

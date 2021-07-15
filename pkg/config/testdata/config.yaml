@@ -1,0 +1,27 @@
+# example configuration
+
+workflows:
+  - name: example-1
+    vhosts: [ /domain ]
+    steps:
+     - name: s1
+       queue: qalias
+       depends: [ __start__ ]
+     - name: s2
+       task: sub2
+       depends: [ s1 ]
+     - name: s3
+       depends: [ s1 ]
+     - name: s4
+       depends: [s2, s3]
+     - name: __end__
+       depends: [ s4 ]
+
+    tasks:
+      - name: sub2
+        itemListKey: subid_list
+        steps:
+         - name: s2s1
+           depends: [ __start__ ]
+         - name: __end__
+           depends: [ s2s1 ]
