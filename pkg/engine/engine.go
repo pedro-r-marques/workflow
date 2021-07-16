@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -52,49 +53,111 @@ func newWorkflowNode(name string, step *config.WorkflowStep) *workflowNode {
 	node := &workflowNode{
 		Name:  name,
 		Queue: queue,
+		Task:  step.Task,
 	}
 	return node
 }
 
-func addSuccessors(nodes map[string]*workflowNode, successors workflowNodeMap, prefix []string, steps []*config.WorkflowStep) {
+func addSuccessors(nodes map[string]*workflowNode, successors workflowNodeMap, prefix []string, steps []*config.WorkflowStep, parent *workflowNode) {
 	for _, step := range steps {
-		for _, dep := range step.Depends {
-			depPath := strings.Join(append(prefix, dep), "/")
+		path := append(prefix, step.Name)
+		stepName := strings.Join(path, "/")
+		node, exists := nodes[stepName]
+		if !exists {
+			node = newWorkflowNode(stepName, step)
+			nodes[stepName] = node
+		}
+
+		addPrefix := true
+		depends := step.Depends
+		if parent != nil && reflect.DeepEqual(depends, []string{config.WorkflowStart}) {
+			depends = parent.Ancestors
+			addPrefix = false
+		}
+		for _, dep := range depends {
+			depPath := dep
+			if addPrefix {
+				depPath = strings.Join(append(prefix, dep), "/")
+			}
+			if depNode, ok := nodes[depPath]; ok && depNode.Task != "" {
+				depPath = depPath + "/" + config.WorkflowEnd
+			}
+
 			nlist, exists := successors[depPath]
 			if !exists {
 				nlist = make([]*workflowNode, 0, 1)
 			}
-			path := append(prefix, step.Name)
-			if step.Task != "" {
-				path = append(path, step.Task, config.WorkflowEnd)
+
+			if step.Task == "" {
+				successors[depPath] = append(nlist, node)
 			}
-			stepName := strings.Join(path, "/")
-			node, exists := nodes[stepName]
-			if !exists {
-				node = newWorkflowNode(stepName, step)
-				nodes[stepName] = node
-			}
-			successors[depPath] = append(nlist, node)
 			node.Ancestors = append(node.Ancestors, depPath)
 		}
 	}
 }
 
-func makeSuccessors(config *config.Workflow) workflowNodeMap {
-	nodes := make(map[string]*workflowNode)
-	successors := make(workflowNodeMap)
-	addSuccessors(nodes, successors, []string{}, config.Steps)
-	for _, step := range config.Steps {
+// short-cut task end nodes from the graph.
+func successorsXCutTaskEnd(wconfig *config.Workflow, successors workflowNodeMap) {
+	var nodesWithEndAncestors []*workflowNode
+	for k, succ := range successors {
+		var modified bool
+		nlist := make([]*workflowNode, 0, len(succ))
+		for _, node := range succ {
+			elements := strings.Split(node.Name, "/")
+			if len(elements) > 1 && elements[len(elements)-1] == config.WorkflowEnd {
+				next := successors[node.Name]
+				for _, x := range next {
+					x.Ancestors = append(x.Ancestors, k)
+					nodesWithEndAncestors = append(nodesWithEndAncestors, x)
+				}
+				nlist = append(nlist, next...)
+				modified = true
+			} else {
+				nlist = append(nlist, node)
+			}
+		}
+		if modified {
+			successors[k] = nlist
+		}
+	}
+	for _, node := range nodesWithEndAncestors {
+		for i := len(node.Ancestors) - 1; i >= 0; i-- {
+			a := node.Ancestors[i]
+			if strings.HasSuffix(a, "/"+config.WorkflowEnd) {
+				node.Ancestors = append(node.Ancestors[:i], node.Ancestors[i+1:]...)
+			}
+		}
+	}
+	for _, step := range wconfig.Steps {
 		if step.Task == "" {
 			continue
 		}
-		for _, task := range config.Tasks {
-			if task.Name == step.Name {
-				path := []string{step.Name, task.Name}
-				addSuccessors(nodes, successors, path, task.Steps)
+		delete(successors, step.Name+"/"+config.WorkflowEnd)
+	}
+}
+
+func makeSuccessors(wconfig *config.Workflow) workflowNodeMap {
+	nodes := make(map[string]*workflowNode)
+	successors := make(workflowNodeMap)
+	addSuccessors(nodes, successors, []string{}, wconfig.Steps, nil)
+
+	var hasTasks bool
+	for _, step := range wconfig.Steps {
+		if step.Task == "" {
+			continue
+		}
+		hasTasks = true
+		for _, task := range wconfig.Tasks {
+			if task.Name == step.Task {
+				path := []string{step.Name}
+				addSuccessors(nodes, successors, path, task.Steps, nodes[step.Name])
 				break
 			}
 		}
+	}
+
+	if hasTasks {
+		successorsXCutTaskEnd(wconfig, successors)
 	}
 	return successors
 }

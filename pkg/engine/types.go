@@ -18,6 +18,7 @@ type LogEntry struct {
 type workflowNode struct {
 	Name      string
 	Queue     string
+	Task      string
 	Ancestors []string
 }
 
