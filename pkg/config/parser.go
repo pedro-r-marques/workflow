@@ -33,7 +33,7 @@ func (v *configValidator) validateSteps(taskNames map[string]bool, steps []*Work
 	nameIndices[WorkflowStart] = -1
 
 	for i, step := range steps {
-		if step.Name != WorkflowEnd && !fullMatchString(v.namePattern, step.Name) {
+		if !fullMatchString(v.namePattern, step.Name) {
 			return fmt.Errorf("invalid step name: %s", step.Name)
 		}
 		if step.Queue != "" && !fullMatchString(v.namePattern, step.Queue) {
@@ -53,9 +53,6 @@ func (v *configValidator) validateSteps(taskNames map[string]bool, steps []*Work
 			}
 		}
 		nameIndices[step.Name] = i
-	}
-	if _, exists := nameIndices[WorkflowEnd]; !exists {
-		return fmt.Errorf("terminal \"__end__\" step must be defined")
 	}
 	return nil
 }
@@ -98,10 +95,33 @@ func setStepDefaults(steps []*WorkflowStep) {
 	}
 }
 
+func generateEndStep(steps []*WorkflowStep) []*WorkflowStep {
+	names := make(map[string]bool)
+	for _, step := range steps {
+		names[step.Name] = true
+		for _, dep := range step.Depends {
+			names[dep] = false
+		}
+	}
+	depends := make([]string, 0, len(names))
+	for k, v := range names {
+		if v {
+			depends = append(depends, k)
+		}
+	}
+	terminal := &WorkflowStep{
+		Name:    WorkflowEnd,
+		Depends: depends,
+	}
+	return append(steps, terminal)
+}
+
 func setDefaults(workflow *Workflow) {
 	setStepDefaults(workflow.Steps)
+	workflow.Steps = generateEndStep(workflow.Steps)
 	for _, task := range workflow.Tasks {
 		setStepDefaults(task.Steps)
+		task.Steps = generateEndStep(task.Steps)
 	}
 }
 

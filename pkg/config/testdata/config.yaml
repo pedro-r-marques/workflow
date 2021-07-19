@@ -14,8 +14,6 @@ workflows:
        depends: [ s1 ]
      - name: s4
        depends: [s2, s3]
-     - name: __end__
-       depends: [ s4 ]
 
     tasks:
       - name: sub2
@@ -23,5 +21,3 @@ workflows:
         steps:
          - name: s2s1
            depends: [ __start__ ]
-         - name: __end__
-           depends: [ s2s1 ]

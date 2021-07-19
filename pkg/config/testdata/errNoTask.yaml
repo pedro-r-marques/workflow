@@ -5,12 +5,8 @@ workflows:
       - name: s2
         task: st2
         depends: [ s1 ]
-      - name: __end__
-        depends: [ s2 ]
     
     tasks:
       - name: st1
         itemListKey: k1
-        steps:
-          - name: __end__
             

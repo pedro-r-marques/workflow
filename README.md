@@ -25,15 +25,11 @@ workflows:
       - name: sum-splits
         depends: [ section-counts ]
       - name: store-title
-      - name: __end__
-        depends: [ sum-splits, store-title ]
     tasks:
       - name: word-counts
         itemListKey: sections
         steps:
           - name: segment-word-counts
-          - name: __end__
-            depends: [ segment-word-counts ]
 
 ```
 

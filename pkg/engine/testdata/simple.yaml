@@ -8,5 +8,3 @@ workflows:
         depends: [s1]
       - name: s4
         depends: [s3]
-      - name: __end__
-        depends: [s2, s4]
