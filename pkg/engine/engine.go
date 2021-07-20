@@ -14,6 +14,8 @@ import (
 	"github.com/pedro-r-marques/workflow/pkg/config"
 )
 
+const correlationIdSepToken = ":"
+
 type WorkflowEngine interface {
 	// Workflow configuration
 	Update(*config.Workflow) error
@@ -23,7 +25,7 @@ type WorkflowEngine interface {
 	// Workflow item
 	Create(workflow string, id uuid.UUID, dict map[string]json.RawMessage) error
 	Cancel(id uuid.UUID) error
-	OnEvent(msg map[string]json.RawMessage) error
+	OnEvent(correlationId string, msg map[string]json.RawMessage) error
 	Watch(id uuid.UUID, allEvents bool, ch chan LogEntry) error
 	ListItems(workflow string) ([]uuid.UUID, error)
 }
@@ -189,14 +191,9 @@ func (e *engine) Update(config *config.Workflow) error {
 func (e *engine) Delete(name string) error { return nil }
 func (e *engine) ListWorkflows() []string  { return nil }
 
-func makeMessage(id uuid.UUID, nodeName string, data map[string]json.RawMessage) map[string]json.RawMessage {
-	msg := make(map[string]json.RawMessage, len(data)+2)
-	for k, v := range data {
-		msg[k] = v
-	}
-	msg["id"] = json.RawMessage(id.String())
-	msg["node"] = json.RawMessage(nodeName)
-	return msg
+func makeMessage(id uuid.UUID, nodeName string, data map[string]json.RawMessage) (string, map[string]json.RawMessage) {
+	correlationId := id.String() + correlationIdSepToken + nodeName
+	return correlationId, data
 }
 
 func (e *engine) workflowStart(item *workItem, data map[string]json.RawMessage) error {
@@ -215,8 +212,8 @@ func (e *engine) workflowStart(item *workItem, data map[string]json.RawMessage) 
 			Start: time.Now(),
 		}
 		item.Open = append(item.Open, log)
-		msg := makeMessage(item.ID, node.Name, data)
-		e.mbus.SendMsg(wrk.VHost, node.Queue, msg)
+		correlationId, msg := makeMessage(item.ID, node.Name, data)
+		e.mbus.SendMsg(wrk.VHost, node.Queue, correlationId, msg)
 	}
 	return nil
 }
@@ -273,8 +270,8 @@ func (e *engine) advanceState(item *workItem, stepName string, data map[string]j
 			Start: time.Now(),
 		}
 		item.Open = append(item.Open, log)
-		msg := makeMessage(item.ID, node.Name, data)
-		e.mbus.SendMsg(wrk.VHost, node.Queue, msg)
+		correlationId, msg := makeMessage(item.ID, node.Name, data)
+		e.mbus.SendMsg(wrk.VHost, node.Queue, correlationId, msg)
 	}
 
 	if done {
@@ -296,17 +293,13 @@ func (e *engine) completed(item *workItem, changes []*LogEntry) {
 	}
 }
 
-func (e *engine) OnEvent(msg map[string]json.RawMessage) error {
-	idStr, exists := msg["id"]
-	if !exists {
-		return fmt.Errorf("invalid message: mandatory field \"id\" missing")
-	}
-	node, exists := msg["node"]
-	if !exists {
-		return fmt.Errorf("invalid message: mandatory field \"node\" missing")
+func (e *engine) OnEvent(correlationId string, msg map[string]json.RawMessage) error {
+	fields := strings.Split(correlationId, correlationIdSepToken)
+	if len(fields) != 2 {
+		return fmt.Errorf("invalid message: malformed correlationId %s", correlationId)
 	}
 
-	id, err := uuid.Parse(string(idStr))
+	id, err := uuid.Parse(fields[0])
 	if err != nil {
 		return fmt.Errorf("invalid message id: %w", err)
 	}
@@ -323,14 +316,14 @@ func (e *engine) OnEvent(msg map[string]json.RawMessage) error {
 
 	var logEntry *LogEntry
 	for i, entry := range item.Open {
-		if entry.Step == string(node) {
+		if entry.Step == fields[1] {
 			logEntry = entry
 			item.Open = append(item.Open[:i], item.Open[i+1:]...)
 			break
 		}
 	}
 	if logEntry == nil {
-		return fmt.Errorf("unexpected message for id %v from %s", id, node)
+		return fmt.Errorf("unexpected message for id %v from %s", id, fields[1])
 	}
 	logEntry.End = time.Now()
 	item.Closed[logEntry.Step] = logEntry

@@ -5,5 +5,6 @@ import (
 )
 
 type MessageBus interface {
-	SendMsg(vhost string, qname string, msg map[string]json.RawMessage) error
+	VHostInit(vhost string)
+	SendMsg(vhost string, qname string, correlationId string, msg map[string]json.RawMessage) error
 }

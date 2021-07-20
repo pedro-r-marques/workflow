@@ -24,7 +24,8 @@ type nopBus struct {
 	messages []map[string]json.RawMessage
 }
 
-func (b *nopBus) SendMsg(vhost string, qname string, msg map[string]json.RawMessage) error {
+func (b *nopBus) VHostInit(vhost string) {}
+func (b *nopBus) SendMsg(vhost string, qname string, correlationId string, msg map[string]json.RawMessage) error {
 	b.messages = append(b.messages, msg)
 	return nil
 }
@@ -56,12 +57,11 @@ func TestSimpleStateMachine(t *testing.T) {
 		assert.NoError(t, err)
 
 		for _, event := range sequence {
+			correlationId := itemID.String() + correlationIdSepToken + event
 			msg := map[string]json.RawMessage{
-				"id":     json.RawMessage(itemID.String()),
-				"node":   json.RawMessage(event),
 				"worker": json.RawMessage("testing"),
 			}
-			err := engine.OnEvent(msg)
+			err := engine.OnEvent(correlationId, msg)
 			assert.NoError(t, err)
 		}
 
@@ -104,27 +104,29 @@ func TestSuccessorNodes(t *testing.T) {
 type echoBus struct {
 	engine   WorkflowEngine
 	messages []map[string]json.RawMessage
-	ch       chan map[string]json.RawMessage
+	ch       chan string
 }
 
 func newEchoBus() *echoBus {
 	return &echoBus{
-		ch: make(chan map[string]json.RawMessage, 2),
+		ch: make(chan string, 2),
 	}
 }
-func (b *echoBus) SendMsg(vhost string, qname string, msg map[string]json.RawMessage) error {
+func (b *echoBus) VHostInit(vhost string) {}
+
+func (b *echoBus) SendMsg(vhost string, qname string, correlationId string, msg map[string]json.RawMessage) error {
 	b.messages = append(b.messages, msg)
-	b.ch <- msg
+	b.ch <- correlationId
 	return nil
 }
 
 func (b *echoBus) Run() {
 	for {
-		msg, ok := <-b.ch
+		meta, ok := <-b.ch
 		if !ok {
 			break
 		}
-		b.engine.OnEvent(msg)
+		b.engine.OnEvent(meta, map[string]json.RawMessage{})
 	}
 }
 
