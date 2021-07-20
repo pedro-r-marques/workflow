@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"testing"
 
@@ -24,7 +25,8 @@ type nopBus struct {
 	messages []map[string]json.RawMessage
 }
 
-func (b *nopBus) VHostInit(vhost string) {}
+func (b *nopBus) SetHandler(MessageBusRecvHandler) {}
+func (b *nopBus) VHostInit(vhost string) error     { return nil }
 func (b *nopBus) SendMsg(vhost string, qname string, correlationId string, msg map[string]json.RawMessage) error {
 	b.messages = append(b.messages, msg)
 	return nil
@@ -61,7 +63,8 @@ func TestSimpleStateMachine(t *testing.T) {
 			msg := map[string]json.RawMessage{
 				"worker": json.RawMessage("testing"),
 			}
-			err := engine.OnEvent(correlationId, msg)
+			body, _ := json.Marshal(msg)
+			err := engine.OnEvent(correlationId, body)
 			assert.NoError(t, err)
 		}
 
@@ -87,46 +90,163 @@ func TestSuccessorNodes(t *testing.T) {
 
 	for k, v := range successors {
 		var nodeNames []string
-		var ancestors string
-		for n, node := range v {
+		for _, node := range v {
 			nodeNames = append(nodeNames, node.Name)
-			if n > 0 {
-				ancestors += " "
-			}
-			ancestors += "{" + strings.Join(node.Ancestors, ", ") + "}"
 		}
-		fmt.Printf("%s [%s] %s\n", k, strings.Join(nodeNames, ","), ancestors)
+		fmt.Printf("%s [%s]\n", k, strings.Join(nodeNames, ","))
 	}
-	assert.Len(t, successors, 4)
+	assert.Len(t, successors, 5)
+	assert.Len(t, impl.workflows["example"].TaskSuccessors, 2)
+}
+
+type mbusMessage struct {
+	correlationId string
+	msg           map[string]json.RawMessage
+}
+type mockBus struct {
+	ch chan mbusMessage
+}
+
+func (b *mockBus) SetHandler(MessageBusRecvHandler) {}
+func (b *mockBus) VHostInit(vhost string) error     { return nil }
+
+func (b *mockBus) SendMsg(vhost string, qname string, correlationId string, msg map[string]json.RawMessage) error {
+	b.ch <- mbusMessage{correlationId, msg}
+	return nil
+}
+
+func jobIDfromCorrelationID(correlationId string) uuid.UUID {
+	loc := strings.Index(correlationId, ":")
+	id, _ := uuid.Parse(correlationId[:loc])
+	return id
+}
+func TestStartTask(t *testing.T) {
+	mock := mockBus{
+		ch: make(chan mbusMessage, 3),
+	}
+	eng := NewWorkflowEngine(&mock, &nopStore{})
+
+	workflows, err := config.ParseConfig("testdata/task.yaml")
+	require.NoError(t, err)
+	require.Len(t, workflows, 1)
+
+	if err := eng.Update(&workflows[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	jobID := uuid.New()
+	err = eng.Create(workflows[0].Name, jobID, map[string]json.RawMessage{})
+	assert.NoError(t, err)
+
+	m0 := <-mock.ch
+	require.Equal(t, jobID, jobIDfromCorrelationID(m0.correlationId))
+
+	r0 := struct {
+		Elements []int `json:"elements"`
+	}{
+		Elements: []int{1, 2},
+	}
+	encoded, _ := json.Marshal(r0)
+	err = eng.OnEvent(m0.correlationId, encoded)
+	assert.NoError(t, err)
+
+	var s2Start bool
+	var task1Start bool
+	for i := 0; i < 3; i++ {
+		msg := <-mock.ch
+		fmt.Println(msg)
+		if msg.correlationId == jobID.String()+correlationIdSepToken+"s2" {
+			s2Start = true
+		}
+		if strings.HasSuffix(msg.correlationId, correlationIdSepToken+"t1s1") {
+			task1Start = true
+		}
+	}
+
+	require.True(t, s2Start)
+	require.True(t, task1Start)
+}
+
+func TestEndTask(t *testing.T) {
+	mock := mockBus{
+		ch: make(chan mbusMessage, 3),
+	}
+	eng := NewWorkflowEngine(&mock, &nopStore{})
+
+	workflows, err := config.ParseConfig("testdata/task.yaml")
+	require.NoError(t, err)
+	require.Len(t, workflows, 1)
+
+	if err := eng.Update(&workflows[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	jobID := uuid.New()
+	err = eng.Create(workflows[0].Name, jobID, map[string]json.RawMessage{})
+	assert.NoError(t, err)
+
+	m0 := <-mock.ch
+	require.Equal(t, jobID, jobIDfromCorrelationID(m0.correlationId))
+
+	r0 := struct {
+		Elements []int `json:"elements"`
+	}{
+		Elements: []int{1, 2},
+	}
+	encoded, _ := json.Marshal(r0)
+	err = eng.OnEvent(m0.correlationId, encoded)
+	assert.NoError(t, err)
+
+	// Reply to the task1 messages
+	for i := 0; i < 3; i++ {
+		msg := <-mock.ch
+		if !strings.HasSuffix(msg.correlationId, correlationIdSepToken+"t1s1") {
+			continue
+		}
+		reply := struct {
+			Element int `json:"element"`
+		}{
+			Element: i,
+		}
+		encoded, _ := json.Marshal(reply)
+		err = eng.OnEvent(msg.correlationId, encoded)
+		assert.NoError(t, err)
+	}
+
+	m2 := <-mock.ch
+	require.Equal(t, jobID.String()+correlationIdSepToken+"s3", m2.correlationId)
 }
 
 // echoBus reflects back the incoming message using a separate thread
 type echoBus struct {
-	engine   WorkflowEngine
-	messages []map[string]json.RawMessage
-	ch       chan string
+	engine             WorkflowEngine
+	recvCorrelationIds []string
+	ch                 chan mbusMessage
 }
 
 func newEchoBus() *echoBus {
 	return &echoBus{
-		ch: make(chan string, 2),
+		ch: make(chan mbusMessage, 10),
 	}
 }
-func (b *echoBus) VHostInit(vhost string) {}
+func (b *echoBus) SetHandler(MessageBusRecvHandler) {}
+func (b *echoBus) VHostInit(vhost string) error     { return nil }
 
 func (b *echoBus) SendMsg(vhost string, qname string, correlationId string, msg map[string]json.RawMessage) error {
-	b.messages = append(b.messages, msg)
-	b.ch <- correlationId
+	b.recvCorrelationIds = append(b.recvCorrelationIds, correlationId)
+	b.ch <- mbusMessage{correlationId, msg}
 	return nil
 }
 
 func (b *echoBus) Run() {
 	for {
-		meta, ok := <-b.ch
+		m, ok := <-b.ch
 		if !ok {
 			break
 		}
-		b.engine.OnEvent(meta, map[string]json.RawMessage{})
+		if err := b.engine.OnEvent(m.correlationId, jsonMustMarshal(m.msg)); err != nil {
+			log.Print(err)
+		}
 	}
 }
 
@@ -143,19 +263,22 @@ func TestSubtaskStateMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	itemID, err := uuid.NewRandom()
+	jobID, err := uuid.NewRandom()
 	require.NoError(t, err)
 
-	err = engine.Create(workflows[0].Name, itemID, map[string]json.RawMessage{})
+	data := map[string]json.RawMessage{
+		"k1": json.RawMessage("[1, 2]"),
+	}
+	err = engine.Create(workflows[0].Name, jobID, data)
 	assert.NoError(t, err)
 
 	ch := make(chan LogEntry, 1)
-	err = engine.Watch(itemID, false, ch)
+	err = engine.Watch(jobID, false, ch)
 	assert.NoError(t, err)
 
 	go mbus.Run()
 
 	log := <-ch
 	assert.Equal(t, config.WorkflowEnd, log.Step)
-	assert.Len(t, mbus.messages, 3)
+	assert.Len(t, mbus.recvCorrelationIds, 7)
 }

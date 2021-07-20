@@ -6,17 +6,11 @@ workflows:
         task: task1
         depends: [ s0 ]
       - name: s2
-        task: task2
         depends: [ s0 ]
       - name: s3
-        task: task1
-        depends: [s2]
+        depends: [s1]
     tasks:
       - name: task1
-        itemListKey: k1
+        itemListKey: elements
         steps:
           - name: t1s1
-      - name: task2
-        itemListKey: k1
-        steps:
-          - name: t2s1

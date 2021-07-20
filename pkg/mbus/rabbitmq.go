@@ -20,7 +20,7 @@ var errNotConnected = errors.New("unable to send message to RabbitMQ server: not
 type rabbitMQSession struct {
 	address         string
 	vhost           string
-	rcvHandler      func(correlationId string, body []byte)
+	rcvHandler      func(correlationId string, body []byte) error
 	configQueueName string
 	queueName       string
 	sendChannel     *amqp.Channel
@@ -29,12 +29,12 @@ type rabbitMQSession struct {
 type rabbitMQBus struct {
 	address         string
 	configQueueName string
-	rcvHandler      func(correlationId string, body []byte)
+	rcvHandler      func(correlationId string, body []byte) error
 	vhosts          map[string]*rabbitMQSession
 	mutex           sync.Mutex
 }
 
-func newRabbitMQSession(address, vhost, configQueueName string, rcvHandler func(correlationId string, body []byte)) *rabbitMQSession {
+func newRabbitMQSession(address, vhost, configQueueName string, rcvHandler func(correlationId string, body []byte) error) *rabbitMQSession {
 	return &rabbitMQSession{
 		address:         address,
 		vhost:           vhost,
@@ -43,16 +43,22 @@ func newRabbitMQSession(address, vhost, configQueueName string, rcvHandler func(
 	}
 }
 
-func NewRabbitMQBus(address string, rcvHandler func(correlationId string, body []byte)) engine.MessageBus {
+func NewRabbitMQBus(address string) engine.MessageBus {
 	return &rabbitMQBus{
 		address:         address,
 		configQueueName: defaultMessageQueueName,
-		rcvHandler:      rcvHandler,
 		vhosts:          make(map[string]*rabbitMQSession),
 	}
 }
 
-func (b *rabbitMQBus) VHostInit(vhost string) {
+func (b *rabbitMQBus) SetHandler(rcvHandler engine.MessageBusRecvHandler) {
+	b.rcvHandler = rcvHandler
+}
+
+func (b *rabbitMQBus) VHostInit(vhost string) error {
+	if b.rcvHandler == nil {
+		return fmt.Errorf("handler must be set before vhost initialization")
+	}
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 	if _, exists := b.vhosts[vhost]; !exists {
@@ -60,6 +66,7 @@ func (b *rabbitMQBus) VHostInit(vhost string) {
 		go session.Run()
 		b.vhosts[vhost] = session
 	}
+	return nil
 }
 func (b *rabbitMQBus) SendMsg(vhost string, qname string, correlationId string, msg map[string]json.RawMessage) error {
 	b.mutex.Lock()
@@ -163,7 +170,7 @@ func (s *rabbitMQSession) recvChannelCreate(connection *amqp.Connection) (*amqp.
 func (s *rabbitMQSession) configRecvQueue(ch *amqp.Channel) error {
 	q, err := ch.QueueDeclare(
 		s.configQueueName,
-		false, // durable
+		true,  // durable
 		false, // autoDelete
 		true,  // exclusive
 		false, // noWait

@@ -9,10 +9,12 @@ import (
 )
 
 type LogEntry struct {
-	Step   string
-	Start  time.Time
-	End    time.Time
-	Worker string
+	Step     string
+	Start    time.Time
+	Children []uuid.UUID
+	End      time.Time
+	Worker   string
+	Data     []byte
 }
 
 type workflowNode struct {
@@ -26,12 +28,13 @@ type workflowNodeMap map[string][]*workflowNode
 type workflowState struct {
 	VHost          string
 	Name           string
-	Workflow       config.Workflow
+	Config         config.Workflow
 	NodeSuccessors workflowNodeMap
+	TaskSuccessors map[string]workflowNodeMap
 	InProgress     []uuid.UUID
 }
 
-type workItem struct {
+type jobState struct {
 	ID       uuid.UUID
 	Workflow *workflowState
 	mutex    sync.Mutex
@@ -39,4 +42,6 @@ type workItem struct {
 	Closed   map[string]*LogEntry
 	watcher  chan LogEntry
 	watchAll bool
+	Task     string
+	Parent   *jobState
 }

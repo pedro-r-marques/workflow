@@ -16,11 +16,13 @@ func TestRabbitMQRecv(t *testing.T) {
 	}
 
 	var mId string
-	handler := func(correlationId string, body []byte) {
+	handler := func(correlationId string, body []byte) error {
 		mId = correlationId
+		return nil
 	}
 
-	mbus := NewRabbitMQBus(amqp_url, handler)
+	mbus := NewRabbitMQBus(amqp_url)
+	mbus.SetHandler(handler)
 	mbus.(*rabbitMQBus).configQueueName = "testing"
 	mbus.VHostInit("")
 
