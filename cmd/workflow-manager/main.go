@@ -65,7 +65,7 @@ func main() {
 
 	// default handler
 	if opt.DebugPort != 0 {
-		http.ListenAndServe(fmt.Sprintf(":%d", opt.DebugPort), nil)
+		go http.ListenAndServe(fmt.Sprintf(":%d", opt.DebugPort), nil)
 	}
 
 	mux := http.NewServeMux()

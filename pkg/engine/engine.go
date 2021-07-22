@@ -562,8 +562,10 @@ func (e *engine) OnEvent(correlationId string, body []byte) error {
 		return err
 	}
 
-	if err := e.store.Update(job.ID, job.Workflow.Name, changes); err != nil {
-		log.Print(err)
+	if e.store != nil {
+		if err := e.store.Update(job.ID, job.Workflow.Name, changes); err != nil {
+			log.Print(err)
+		}
 	}
 
 	return nil

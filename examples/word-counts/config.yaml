@@ -1,0 +1,15 @@
+workflows:
+  - name: book-word-counts
+    steps:
+      - name: book-split
+      - name: section-counts
+        task: word-counts
+        depends: [ book-split ]
+      - name: sum-splits
+        depends: [ section-counts ]
+      - name: store-title
+    tasks:
+      - name: word-counts
+        itemListKey: sections
+        steps:
+          - name: segment-word-counts

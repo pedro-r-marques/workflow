@@ -142,8 +142,8 @@ class BaseQueueDispatcher(abc.ABC):
         :param bytes body: The message body
 
         """
-        self._logger.info('Received message # %s from %s: %s',
-                          basic_deliver.delivery_tag, properties.app_id, body)
+        self._logger.debug('Received message # %s from %s: %s',
+                           basic_deliver.delivery_tag, properties.app_id, body)
         try:
             response = self.handler(
                 properties.correlation_id,
@@ -158,7 +158,7 @@ class BaseQueueDispatcher(abc.ABC):
                 json.dumps(response) if response is not None else None,
                 properties=rprop)
         except Exception as ex:
-            self._logger.error(ex)
+            self._logger.exception(ex)
             channel.basic_nack(basic_deliver.delivery_tag)
 
     def on_cancelok(self, unused_frame):
