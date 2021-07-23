@@ -95,7 +95,7 @@ func (s *ApiServer) createJob(w http.ResponseWriter, req *http.Request) {
 	}
 
 	response := struct {
-		ID string
+		ID string `json:"id"`
 	}{
 		ID: jobID.String(),
 	}
@@ -134,6 +134,31 @@ func (s *ApiServer) listJobs(w http.ResponseWriter, req *http.Request) {
 
 // GET /api/job/id
 func (s *ApiServer) getJob(w http.ResponseWriter, req *http.Request) {
+	jobIDStr := req.URL.Path[len("/api/job/"):]
+	jobID, err := uuid.Parse(jobIDStr)
+	if err != nil {
+		setHttpError(w, http.StatusBadRequest, fmt.Sprintf("invalid uuid %s", jobIDStr))
+		return
+	}
+
+	open, closed, err := s.engine.JobStatus(jobID)
+	if err != nil {
+		setHttpError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	response := struct {
+		ID     string                  `json:"uuid"`
+		Open   []engine.JobStatusEntry `json:"running"`
+		Closed []engine.JobStatusEntry `json:"completed"`
+	}{jobID.String(), open, closed}
+	body, err := json.Marshal(response)
+	if err != nil {
+		setHttpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-type", "application/json")
+	w.Write(body)
 }
 
 // DELETE /api/job/id
