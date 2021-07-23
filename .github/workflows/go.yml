@@ -31,7 +31,7 @@ jobs:
       run: |
         go install github.com/golang/mock/mockgen@v1.6.0
         go generate ./...
-        AMQP_SERVER="amqp://guest:guest@rabbitmq:5672/" go test -v ./...
+        AMQP_SERVER="amqp://guest:guest@localhost:5672/" go test -v ./...
 
     - name: Set up Python 3.8
       uses: actions/setup-python@v2
@@ -50,4 +50,4 @@ jobs:
 
     - name: Test with pytest
       run: |
-        AMQP_SERVER="amqp://guest:guest@rabbitmq:5672/" pytest pyworker
+        AMQP_SERVER="amqp://guest:guest@localhost:5672/" pytest pyworker
