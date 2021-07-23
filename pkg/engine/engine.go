@@ -26,13 +26,14 @@ type WorkflowEngine interface {
 	Delete(name string) error
 	ListWorkflows() []string
 
-	// Workflow item
+	// Workflow job
 	Create(workflow string, id uuid.UUID, dict map[string]json.RawMessage) error
 	Cancel(id uuid.UUID) error
 	OnEvent(correlationId string, body []byte) error
 	Watch(id uuid.UUID, allEvents bool, ch chan LogEntry) error
 	ListWorkflowJobs(workflow string) ([]uuid.UUID, error)
 	ListJobs() []uuid.UUID
+	JobStatus(id uuid.UUID) ([]JobStatusEntry, []JobStatusEntry, error)
 }
 
 type engine struct {
@@ -600,4 +601,45 @@ func (e *engine) ListJobs() []uuid.UUID {
 	}
 
 	return jobIDs
+}
+
+func elapsedTime(end, start time.Time) time.Duration {
+	if end.IsZero() {
+		return 0
+	}
+	return end.Sub(start)
+}
+
+func makeStatusEntry(logEntry *LogEntry) JobStatusEntry {
+	return JobStatusEntry{
+		Name:     logEntry.Step,
+		Start:    logEntry.Start,
+		Elapsed:  elapsedTime(logEntry.End, logEntry.Start),
+		Children: logEntry.Children,
+		Worker:   logEntry.Worker,
+		Data:     logEntry.Data,
+	}
+}
+
+func (e *engine) JobStatus(id uuid.UUID) ([]JobStatusEntry, []JobStatusEntry, error) {
+	e.mutex.Lock()
+	job, exists := e.jobs[id]
+	e.mutex.Unlock()
+	if !exists {
+		return nil, nil, fmt.Errorf("unknown job id %v", id)
+	}
+
+	job.mutex.Lock()
+	defer job.mutex.Unlock()
+
+	open := make([]JobStatusEntry, 0, len(job.Open))
+	for _, logEntry := range job.Open {
+		open = append(open, makeStatusEntry(logEntry))
+	}
+	closed := make([]JobStatusEntry, 0, len(job.Closed))
+	for _, logEntry := range job.Closed {
+		closed = append(closed, makeStatusEntry(logEntry))
+	}
+
+	return open, closed, nil
 }

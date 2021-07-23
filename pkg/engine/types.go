@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -15,6 +16,15 @@ type LogEntry struct {
 	End      time.Time
 	Worker   string
 	Data     []byte
+}
+
+type JobStatusEntry struct {
+	Name     string          `json:"name"`
+	Start    time.Time       `json:"startTime"`
+	Elapsed  time.Duration   `json:"elapsed,omitempty"`
+	Children []uuid.UUID     `json:"tasks,omitempty"`
+	Worker   string          `json:"worker,omitempty"`
+	Data     json.RawMessage `json:"message"`
 }
 
 type workflowNode struct {
