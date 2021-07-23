@@ -10,6 +10,12 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    services:
+      rabbitmq:
+        image: rabbitmq:3-management
+        ports:
+          - 5672:5672
+          - 15672:15672
     steps:
     - uses: actions/checkout@v2
 
@@ -25,4 +31,23 @@ jobs:
       run: |
         go install github.com/golang/mock/mockgen@v1.6.0
         go generate ./...
-        go test -v ./...
+        AMQP_SERVER="amqp://guest:guest@rabbitmq:5672/" go test -v ./...
+
+    - name: Set up Python 3.8
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.8
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install flake8 pytest
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+    - name: Lint with flake8
+      run: |
+        # stop the build if there are Python syntax errors or undefined names
+        flake8 --count --select=E9,F63,F7,F82 --show-source --statistics pyworker
+
+    - name: Test with pytest
+      run: |
+        AMQP_SERVER="amqp://guest:guest@rabbitmq:5672/" pytest pyworker
