@@ -1,7 +1,7 @@
 import json
 import os
 import unittest
-import logging
+import uuid
 
 import tornado.ioloop
 import pika
@@ -68,3 +68,39 @@ class QueueDispatcherTest(unittest.TestCase):
 
         self.assertEqual(mock_manager.rcv_correlation_id,
                          mock_manager.snd_correlation_id)
+
+    def test_exception(self):
+        count = 0
+
+        ioloop = tornado.ioloop.IOLoop.current()
+
+        def handler(correlation_id, data):
+            nonlocal count
+            prev = count
+            count += 1
+            if prev == 0:
+                raise Exception('error processing message')
+            if prev == 1:
+                ioloop.stop()
+            return data
+
+        dispatcher = MessageQueueDispatcher(
+            os.environ['AMQP_SERVER'], "unittest", handler
+        )
+        dispatcher.connect()
+
+        connection = pika.BlockingConnection(
+            pika.URLParameters(os.environ['AMQP_SERVER']))
+        channel = connection.channel()
+        channel.queue_declare("unittest", durable=True)
+        job_id = uuid.uuid4()
+        channel.basic_publish(
+            "", "unittest", json.dumps({}),
+            properties=pika.spec.BasicProperties(
+                delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
+                correlation_id=str(job_id) + ":example",
+            )
+        )
+
+        ioloop.start()
+        self.assertEqual(count, 2)
