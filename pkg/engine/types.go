@@ -24,7 +24,7 @@ type JobStatusEntry struct {
 	Elapsed  time.Duration   `json:"elapsed,omitempty"`
 	Children []uuid.UUID     `json:"tasks,omitempty"`
 	Worker   string          `json:"worker,omitempty"`
-	Data     json.RawMessage `json:"message"`
+	Data     json.RawMessage `json:"message,omitempty"`
 }
 
 type workflowNode struct {

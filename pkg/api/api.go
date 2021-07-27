@@ -115,7 +115,7 @@ func (s *ApiServer) listWorkflowJobs(w http.ResponseWriter, req *http.Request) {
 func (s *ApiServer) listJobs(w http.ResponseWriter, req *http.Request) {
 	jobIDs := s.engine.ListJobs()
 	var response struct {
-		Jobs []string
+		Jobs []string `json:"jobs"`
 	}
 	response.Jobs = make([]string, 0, len(jobIDs))
 	for _, j := range jobIDs {
