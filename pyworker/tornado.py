@@ -1,10 +1,10 @@
 """ workflow worker library using the tornado asynchronous library
 """
 import pika
-from pika import adapters
 from pika.adapters.tornado_connection import TornadoConnection
 
 from .dispatcher import BaseQueueDispatcher
+
 
 class MessageQueueDispatcher(BaseQueueDispatcher):
     """ Register with the AMQP server and process incomimg messages from

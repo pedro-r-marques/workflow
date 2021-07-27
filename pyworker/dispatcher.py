@@ -1,9 +1,10 @@
 import abc
+import functools
 import logging
 import json
+import sys
 
 import pika
-from pika import connection
 
 
 class BaseQueueDispatcher(abc.ABC):
@@ -12,6 +13,7 @@ class BaseQueueDispatcher(abc.ABC):
         self.queue_name = queue_name
         self.handler = handler
         self._connection = None
+        self._channel = None
         self._closing = False
         self._consumer_tag = None
         self._logger = logging.getLogger(self.__class__.__name__)
@@ -80,9 +82,10 @@ class BaseQueueDispatcher(abc.ABC):
         :param Exception reason: why the channel was closed
 
         """
-        self.logger.warning('Channel %r was closed: %s', channel, reason)
+        self._logger.warning('Channel %r was closed: %s', channel, reason)
         self._channel = None
-        self._connection.ioloop.call_later(1, self.open_channel)
+        self._connection.ioloop.call_later(
+            1, self.open_channel, self._connection)
 
     def on_channel_open(self, channel):
         """This method is invoked by pika when the channel has been opened.
@@ -128,6 +131,39 @@ class BaseQueueDispatcher(abc.ABC):
         if self._channel:
             self._channel.close()
 
+    def _handler_callback(self, channel, basic_deliver, properties, future):
+        """ The pika transport is designed such that writes are queues in
+            the asynchronous select loop. This code uses a separate blocking
+            connection to respond to the workflow-manager so that the workflow
+            can proceed immediatly. Alternativly one could start a different
+            connection on a different thread, which brings in complexity. Or
+            modify the pika transport such that writes are sent immediatly
+            unless the socket send returns EAGAIN.
+        """
+        ex = future.exception()
+        if ex is not None:
+            self._logger.exception(ex)
+            channel.basic_nack(basic_deliver.delivery_tag)
+            return
+
+        response = future.result()
+        channel.basic_ack(basic_deliver.delivery_tag)
+        # null reply_to used in unittests only
+        if properties.reply_to is None:
+            return
+        send_connection = pika.BlockingConnection(
+            pika.URLParameters(self.amqp_url))
+        rprop = pika.spec.BasicProperties(
+            app_id=sys.argv[0],
+            content_type="application/json",
+            delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
+            correlation_id=properties.correlation_id)
+        send_channel = send_connection.channel()
+        send_channel.basic_publish(
+            "", properties.reply_to,
+            json.dumps(response) if response is not None else None,
+            properties=rprop)
+
     def on_message(self, channel, basic_deliver, properties, body):
         """Invoked by pika when a message is delivered from RabbitMQ. The
         channel is passed for your convenience. The basic_deliver object that
@@ -144,22 +180,14 @@ class BaseQueueDispatcher(abc.ABC):
         """
         self._logger.debug('Received message # %s from %s: %s',
                            basic_deliver.delivery_tag, properties.app_id, body)
-        try:
-            response = self.handler(
-                properties.correlation_id,
-                json.loads(body) if body is not None else None)
-            channel.basic_ack(basic_deliver.delivery_tag)
-            rprop = pika.spec.BasicProperties(
-                content_type="application/json",
-                delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
-                correlation_id=properties.correlation_id)
-            channel.basic_publish(
-                "", properties.reply_to,
-                json.dumps(response) if response is not None else None,
-                properties=rprop)
-        except Exception as ex:
-            self._logger.exception(ex)
-            channel.basic_nack(basic_deliver.delivery_tag)
+
+        ioloop = self._connection.ioloop
+        msg = json.loads(body) if body is not None else None
+        fut = ioloop.run_in_executor(
+            None, self.handler, properties.correlation_id, msg)
+        hndl = functools.partial(
+            self._handler_callback, channel, basic_deliver, properties)
+        fut.add_done_callback(hndl)
 
     def on_cancelok(self, unused_frame):
         """This method is invoked by pika when RabbitMQ acknowledges the
