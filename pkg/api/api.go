@@ -92,6 +92,7 @@ func (s *ApiServer) createJob(w http.ResponseWriter, req *http.Request) {
 
 	if err := s.engine.Create(workflow, jobID, msg); err != nil {
 		setHttpError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	response := struct {
@@ -108,7 +109,29 @@ func (s *ApiServer) createJob(w http.ResponseWriter, req *http.Request) {
 
 // GET /api/workflow/<name>
 func (s *ApiServer) listWorkflowJobs(w http.ResponseWriter, req *http.Request) {
+	name := req.URL.Path[len("/api/workflow/"):]
+	q := req.URL.Query()
+	if vhost := q.Get("vhost"); vhost != "" {
+		name = vhost + "/" + name
+	}
+	uuids, err := s.engine.ListWorkflowJobs(name)
+	if err != nil {
+		setHttpError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	response := struct {
+		Jobs []uuid.UUID `json:"jobs"`
+	}{
+		Jobs: uuids,
+	}
+	body, err := json.Marshal(response)
+	if err != nil {
+		setHttpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
+	w.Header().Set("Content-type", "application/json")
+	w.Write(body)
 }
 
 // GET /api/jobs
