@@ -19,17 +19,12 @@ func NewApiServer(engine engine.WorkflowEngine) *ApiServer {
 	return &ApiServer{engine: engine}
 }
 
-func setHttpError(w http.ResponseWriter, statusCode int, errMessage string) {
-	w.Write([]byte(errMessage))
-	w.WriteHeader(statusCode)
-}
-
 // GET /api/workflows
 func (s *ApiServer) listWorkflows(w http.ResponseWriter, req *http.Request) {
 	list := s.engine.ListWorkflows()
 	msg, err := json.Marshal(list)
 	if err != nil {
-		setHttpError(w, http.StatusInternalServerError, err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-type", "application/json")
@@ -44,13 +39,13 @@ func (s *ApiServer) createJob(w http.ResponseWriter, req *http.Request) {
 	var idSet bool
 	if idList, exists := q["id"]; exists {
 		if len(idList) != 1 {
-			setHttpError(w, http.StatusBadRequest, "invalid format for query parameter \"id\"")
+			http.Error(w, "invalid format for query parameter \"id\"", http.StatusBadRequest)
 			return
 		}
 		var err error
 		jobID, err = uuid.Parse(idList[0])
 		if err != nil {
-			setHttpError(w, http.StatusBadRequest, fmt.Sprintf("unable to parse uuid: %s", err.Error()))
+			http.Error(w, fmt.Sprintf("unable to parse uuid: %s", err.Error()), http.StatusBadRequest)
 			return
 		}
 		idSet = true
@@ -60,23 +55,23 @@ func (s *ApiServer) createJob(w http.ResponseWriter, req *http.Request) {
 	if req.Body != nil {
 		body, err := ioutil.ReadAll(req.Body)
 		if err != nil {
-			setHttpError(w, http.StatusBadRequest, err.Error())
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		if err := json.Unmarshal(body, &msg); err != nil {
-			setHttpError(w, http.StatusBadRequest, err.Error())
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 	}
 	if idStr, exists := msg["id"]; exists {
 		v, err := uuid.Parse(string(idStr))
 		if err != nil {
-			setHttpError(w, http.StatusBadRequest, err.Error())
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if idSet && v != jobID {
-			setHttpError(w, http.StatusBadRequest, "different \"id\" values in query and body")
+			http.Error(w, "different \"id\" values in query and body", http.StatusBadRequest)
 			return
 		}
 		if !idSet {
@@ -85,13 +80,14 @@ func (s *ApiServer) createJob(w http.ResponseWriter, req *http.Request) {
 	} else if !idSet {
 		var err error
 		if jobID, err = uuid.NewRandom(); err != nil {
-			setHttpError(w, http.StatusInternalServerError, err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 
 	if err := s.engine.Create(workflow, jobID, msg); err != nil {
-		setHttpError(w, http.StatusBadRequest, err.Error())
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	response := struct {
@@ -108,14 +104,36 @@ func (s *ApiServer) createJob(w http.ResponseWriter, req *http.Request) {
 
 // GET /api/workflow/<name>
 func (s *ApiServer) listWorkflowJobs(w http.ResponseWriter, req *http.Request) {
+	name := req.URL.Path[len("/api/workflow/"):]
+	q := req.URL.Query()
+	if vhost := q.Get("vhost"); vhost != "" {
+		name = vhost + "/" + name
+	}
+	uuids, err := s.engine.ListWorkflowJobs(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	response := struct {
+		Jobs []uuid.UUID `json:"jobs"`
+	}{
+		Jobs: uuids,
+	}
+	body, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
+	w.Header().Set("Content-type", "application/json")
+	w.Write(body)
 }
 
 // GET /api/jobs
 func (s *ApiServer) listJobs(w http.ResponseWriter, req *http.Request) {
 	jobIDs := s.engine.ListJobs()
 	var response struct {
-		Jobs []string
+		Jobs []string `json:"jobs"`
 	}
 	response.Jobs = make([]string, 0, len(jobIDs))
 	for _, j := range jobIDs {
@@ -124,7 +142,7 @@ func (s *ApiServer) listJobs(w http.ResponseWriter, req *http.Request) {
 
 	body, err := json.Marshal(response)
 	if err != nil {
-		setHttpError(w, http.StatusInternalServerError, err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -137,13 +155,13 @@ func (s *ApiServer) getJob(w http.ResponseWriter, req *http.Request) {
 	jobIDStr := req.URL.Path[len("/api/job/"):]
 	jobID, err := uuid.Parse(jobIDStr)
 	if err != nil {
-		setHttpError(w, http.StatusBadRequest, fmt.Sprintf("invalid uuid %s", jobIDStr))
+		http.Error(w, fmt.Sprintf("invalid uuid %s", jobIDStr), http.StatusBadRequest)
 		return
 	}
 
 	open, closed, err := s.engine.JobStatus(jobID)
 	if err != nil {
-		setHttpError(w, http.StatusBadGateway, err.Error())
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
@@ -154,7 +172,7 @@ func (s *ApiServer) getJob(w http.ResponseWriter, req *http.Request) {
 	}{jobID.String(), open, closed}
 	body, err := json.Marshal(response)
 	if err != nil {
-		setHttpError(w, http.StatusInternalServerError, err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-type", "application/json")

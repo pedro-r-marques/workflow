@@ -21,6 +21,7 @@ type options struct {
 	Port       int
 	AMQPServer string
 	Config     string
+	HTMLDir    string
 }
 
 func (opt *options) Register() {
@@ -35,6 +36,7 @@ func (opt *options) Register() {
 	flag.StringVar(&opt.AMQPServer, "amqp-server", os.Getenv("AMQP_SERVER"), "AMQP server url")
 	confPath := path.Join(execDir, "./etc/workflow-manager.conf")
 	flag.StringVar(&opt.Config, "config", confPath, "Workflow configuration file")
+	flag.StringVar(&opt.HTMLDir, "html", path.Join(execDir, "static"), "Directory containing html/js debug UI")
 }
 
 func configure(wrkEngine engine.WorkflowEngine, mbus engine.MessageBus, workflows []config.Workflow) {
@@ -78,6 +80,6 @@ func main() {
 
 	apiServer := api.NewApiServer(wrkEngine)
 	mux.Handle("/api/", apiServer)
-	mux.Handle("/", http.FileServer(http.Dir("static/")))
+	mux.Handle("/", http.FileServer(http.Dir(opt.HTMLDir)))
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", opt.Port), mux))
 }

@@ -20,11 +20,18 @@ const correlationIdSepToken = ":"
 
 var errTaskNop = errors.New("no elements for task")
 
+// Information returned by ListWorkflows per workflow
+type WorkflowInfo struct {
+	VHost    string `json:"vhost"`
+	Name     string `json:"name"`
+	JobCount int    `json:"job_count"`
+}
+
 type WorkflowEngine interface {
 	// Workflow configuration
 	Update(*config.Workflow) error
 	Delete(name string) error
-	ListWorkflows() []string
+	ListWorkflows() []WorkflowInfo
 
 	// Workflow job
 	Create(workflow string, id uuid.UUID, dict map[string]json.RawMessage) error
@@ -74,69 +81,23 @@ func jsonMustMarshal(data map[string]json.RawMessage) []byte {
 	return result
 }
 
-func addSuccessors(successors workflowNodeMap, steps []*config.WorkflowStep) {
-	nodes := make(map[string]*workflowNode)
-
-	for _, step := range steps {
-		node, exists := nodes[step.Name]
-		if !exists {
-			node = newWorkflowNode(step.Name, step)
-			nodes[step.Name] = node
-		}
-
-		for _, dep := range step.Depends {
-			nlist, exists := successors[dep]
-			if !exists {
-				nlist = make([]*workflowNode, 0, 1)
-			}
-
-			successors[dep] = append(nlist, node)
-			node.Ancestors = append(node.Ancestors, dep)
-		}
-	}
-}
-
-func makeSuccessors(wconfig *config.Workflow) workflowNodeMap {
-	successors := make(workflowNodeMap)
-	addSuccessors(successors, wconfig.Steps)
-	return successors
-}
-
-func makeTaskSuccessors(wconfig *config.Workflow) map[string]workflowNodeMap {
-	if len(wconfig.Tasks) == 0 {
-		return nil
-	}
-	taskSuccessors := make(map[string]workflowNodeMap, len(wconfig.Tasks))
-	for _, task := range wconfig.Tasks {
-		successors := make(workflowNodeMap)
-		addSuccessors(successors, task.Steps)
-		taskSuccessors[task.Name] = successors
-	}
-
-	return taskSuccessors
-}
-
-func (e *engine) Update(config *config.Workflow) error {
+func (e *engine) Update(wconfig *config.Workflow) error {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 	// TODO: garbage collect previous vhosts.
 	var workflowNames []string
-	if len(config.VHosts) > 0 {
-		workflowNames = make([]string, len(config.VHosts))
-		for i, vhost := range config.VHosts {
-			workflowNames[i] = strings.Join([]string{vhost, config.Name}, "/")
+	if len(wconfig.VHosts) > 0 {
+		workflowNames = make([]string, len(wconfig.VHosts))
+		for i, vhost := range wconfig.VHosts {
+			workflowNames[i] = strings.Join([]string{vhost, wconfig.Name}, "/")
 		}
 	} else {
-		workflowNames = []string{config.Name}
+		workflowNames = []string{wconfig.Name}
 	}
 	for i, name := range workflowNames {
-		wstate := &workflowState{
-			Config:         *config,
-			NodeSuccessors: makeSuccessors(config),
-			TaskSuccessors: makeTaskSuccessors(config),
-		}
-		if len(config.VHosts) > 0 {
-			wstate.VHost = config.VHosts[i]
+		wstate := makeWorkflowState(wconfig)
+		if len(wconfig.VHosts) > 0 {
+			wstate.VHost = wconfig.VHosts[i]
 		}
 		e.workflows[name] = wstate
 	}
@@ -144,15 +105,22 @@ func (e *engine) Update(config *config.Workflow) error {
 }
 
 func (e *engine) Delete(name string) error { return nil }
-func (e *engine) ListWorkflows() []string {
+
+func (e *engine) ListWorkflows() []WorkflowInfo {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	names := make([]string, 0, len(e.workflows))
-	for k := range e.workflows {
-		names = append(names, k)
+	result := make([]WorkflowInfo, 0, len(e.workflows))
+	for _, v := range e.workflows {
+		v.mutex.Lock()
+		defer v.mutex.Unlock()
+		result = append(result, WorkflowInfo{
+			VHost:    v.VHost,
+			Name:     v.Name,
+			JobCount: len(v.jobs),
+		})
 	}
-	return names
+	return result
 }
 
 func makeMessage(id uuid.UUID, nodeName string, data map[string]json.RawMessage) (string, map[string]json.RawMessage) {
@@ -235,13 +203,7 @@ func (e *engine) createTask(job *jobState, nodeName, taskName string, data map[s
 
 	for i, elementRaw := range jsonElementList {
 		id := taskIDs[i]
-		wstate := &workflowState{
-			VHost:          job.Workflow.VHost,
-			Name:           job.Workflow.Name + "/" + nodeName,
-			Config:         job.Workflow.Config,
-			NodeSuccessors: job.Workflow.TaskSuccessors[taskName],
-			TaskSuccessors: job.Workflow.TaskSuccessors,
-		}
+		wstate := job.Workflow.locateTaskState(nodeName, taskName)
 		task := &jobState{
 			ID:       id,
 			Workflow: wstate,
@@ -252,6 +214,8 @@ func (e *engine) createTask(job *jobState, nodeName, taskName string, data map[s
 		e.mutex.Lock()
 		e.jobs[id] = task
 		e.mutex.Unlock()
+
+		wstate.onJobCreate(task)
 
 		msg := makeTaskMessage(data, taskConfig, elementRaw)
 		e.workflowStart(task, msg)
@@ -305,14 +269,18 @@ func (e *engine) Create(workflow string, id uuid.UUID, dict map[string]json.RawM
 		return fmt.Errorf("unknown workflow: %s", workflow)
 	}
 
-	e.mutex.Lock()
-	e.jobs[id] = &jobState{
+	job := &jobState{
 		ID:       id,
 		Workflow: wstate,
 		Closed:   make(map[string]*LogEntry),
 	}
+
+	e.mutex.Lock()
+	e.jobs[id] = job
 	e.mutex.Unlock()
-	return e.workflowStart(e.jobs[id], dict)
+
+	wstate.onJobCreate(job)
+	return e.workflowStart(job, dict)
 }
 
 func dependencyCheck(job *jobState, node *workflowNode) (bool, [][]byte) {
@@ -404,6 +372,8 @@ func (e *engine) completed(job *jobState, data map[string]json.RawMessage, chang
 	_ = append(changes, &log)
 	job.Closed[config.WorkflowEnd] = &log
 
+	job.Workflow.onJobDone(job)
+
 	if job.watcher != nil {
 		job.watcher <- log
 		close(job.watcher)
@@ -412,6 +382,15 @@ func (e *engine) completed(job *jobState, data map[string]json.RawMessage, chang
 		pieces := strings.Split(job.Workflow.Name, "/")
 		nodeName := pieces[len(pieces)-1]
 		e.maybeTaskEnd(job.Parent, nodeName, job.Task)
+	} else {
+		e.mutex.Lock()
+		defer e.mutex.Unlock()
+		for _, l := range job.Closed {
+			for _, id := range l.Children {
+				delete(e.jobs, id)
+			}
+		}
+		delete(e.jobs, job.ID)
 	}
 }
 
@@ -588,8 +567,25 @@ func (e *engine) Watch(id uuid.UUID, allEvents bool, ch chan LogEntry) error {
 	return nil
 }
 
-func (e *engine) Cancel(id uuid.UUID) error                             { return nil }
-func (e *engine) ListWorkflowJobs(workflow string) ([]uuid.UUID, error) { return nil, nil }
+func (e *engine) Cancel(id uuid.UUID) error { return nil }
+
+func (e *engine) ListWorkflowJobs(workflowName string) ([]uuid.UUID, error) {
+	e.mutex.Lock()
+	wstate, exists := e.workflows[workflowName]
+	e.mutex.Unlock()
+
+	if !exists {
+		return nil, fmt.Errorf("unknown workflow %s", workflowName)
+	}
+	wstate.mutex.Lock()
+	defer wstate.mutex.Unlock()
+
+	uuids := make([]uuid.UUID, len(wstate.jobs))
+	for i, id := range wstate.jobs {
+		uuids[i] = id
+	}
+	return uuids, nil
+}
 
 func (e *engine) ListJobs() []uuid.UUID {
 	e.mutex.Lock()

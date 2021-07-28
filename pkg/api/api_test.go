@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pedro-r-marques/workflow/pkg/engine"
 	mock_engine "github.com/pedro-r-marques/workflow/pkg/engine/mock"
 )
 
@@ -21,9 +22,9 @@ func TestListWorkflows(t *testing.T) {
 	defer ctrl.Finish()
 
 	w := httptest.NewRecorder()
-	engine := mock_engine.NewMockWorkflowEngine(ctrl)
-	engine.EXPECT().ListWorkflows().Return([]string{"example"})
-	apiSrv := NewApiServer(engine)
+	mock := mock_engine.NewMockWorkflowEngine(ctrl)
+	mock.EXPECT().ListWorkflows().Return([]engine.WorkflowInfo{{Name: "example"}})
+	apiSrv := NewApiServer(mock)
 	req, _ := http.NewRequest(http.MethodGet, "/api/workflows", nil)
 	apiSrv.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)

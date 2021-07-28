@@ -217,6 +217,57 @@ func TestEndTask(t *testing.T) {
 	require.Equal(t, jobID.String()+correlationIdSepToken+"s3", m2.correlationId)
 }
 
+func TestJobList(t *testing.T) {
+	mock := mockBus{
+		ch: make(chan mbusMessage, 3),
+	}
+	eng := NewWorkflowEngine(&mock, &nopStore{})
+
+	workflows, err := config.ParseConfig("testdata/task.yaml")
+	require.NoError(t, err)
+	require.Len(t, workflows, 1)
+
+	if err := eng.Update(&workflows[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	jobID := uuid.New()
+	err = eng.Create(workflows[0].Name, jobID, map[string]json.RawMessage{})
+	assert.NoError(t, err)
+
+	require.Len(t, eng.ListJobs(), 1)
+	uuids, err := eng.ListWorkflowJobs(workflows[0].Name)
+	require.NoError(t, err)
+	require.Len(t, uuids, 1)
+
+	m0 := <-mock.ch
+	require.Equal(t, jobID, jobIDfromCorrelationID(m0.correlationId))
+
+	// Reply from step "s0" such that 2 tasks created.
+	r0 := struct {
+		Elements []int `json:"elements"`
+	}{
+		Elements: []int{1, 2},
+	}
+	encoded, _ := json.Marshal(r0)
+	err = eng.OnEvent(m0.correlationId, encoded)
+	assert.NoError(t, err)
+
+	require.Len(t, eng.ListJobs(), 3)
+
+	// Reply to all messages
+	for i := 0; i < 4; i++ {
+		msg := <-mock.ch
+		encoded, _ := json.Marshal(msg.msg)
+		require.NoError(t, eng.OnEvent(msg.correlationId, encoded))
+	}
+
+	require.Len(t, eng.ListJobs(), 0)
+	uuids, err = eng.ListWorkflowJobs(workflows[0].Name)
+	require.NoError(t, err)
+	require.Len(t, uuids, 0)
+}
+
 // echoBus reflects back the incoming message using a separate thread
 type echoBus struct {
 	engine             WorkflowEngine

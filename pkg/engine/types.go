@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pedro-r-marques/workflow/pkg/config"
 )
 
 type LogEntry struct {
@@ -24,24 +23,7 @@ type JobStatusEntry struct {
 	Elapsed  time.Duration   `json:"elapsed,omitempty"`
 	Children []uuid.UUID     `json:"tasks,omitempty"`
 	Worker   string          `json:"worker,omitempty"`
-	Data     json.RawMessage `json:"message"`
-}
-
-type workflowNode struct {
-	Name      string
-	Queue     string
-	Task      string
-	Ancestors []string
-}
-
-type workflowNodeMap map[string][]*workflowNode
-type workflowState struct {
-	VHost          string
-	Name           string
-	Config         config.Workflow
-	NodeSuccessors workflowNodeMap
-	TaskSuccessors map[string]workflowNodeMap
-	InProgress     []uuid.UUID
+	Data     json.RawMessage `json:"message,omitempty"`
 }
 
 type jobState struct {
