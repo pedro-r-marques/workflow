@@ -122,3 +122,49 @@ func TestJobDone(t *testing.T) {
 		require.Len(t, logs, 1)
 	}
 }
+
+func TestRecover(t *testing.T) {
+	tmpfile, err := ioutil.TempFile("", "dbfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer os.Remove(tmpfile.Name())
+
+	store, err := NewSqliteStore(tmpfile.Name())
+	assert.NoError(t, err)
+
+	var jobIDs []uuid.UUID
+
+	steps := []string{"s0", "s1", "s3"}
+	for n, step := range steps {
+		for i := 0; i < 10; i++ {
+			var jobID uuid.UUID
+			if n == 0 {
+				jobID = uuid.New()
+				jobIDs = append(jobIDs, jobID)
+			} else {
+				jobID = jobIDs[i]
+			}
+
+			logs := []*engine.LogEntry{
+				{
+					Step:   step,
+					Worker: fmt.Sprintf("w%d", i),
+				},
+			}
+			err = store.Update(jobID, "example-workflow", logs)
+			require.NoError(t, err)
+		}
+	}
+
+	rcvInfo, err := store.Recover()
+	assert.NoError(t, err)
+	require.Len(t, rcvInfo, len(jobIDs))
+	rcvIDs := make([]uuid.UUID, len(jobIDs))
+	for i, l := range rcvInfo {
+		rcvIDs[i] = l.ID
+		require.Len(t, l.Logs, len(steps))
+	}
+	require.ElementsMatch(t, rcvIDs, jobIDs)
+}

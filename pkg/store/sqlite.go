@@ -163,3 +163,68 @@ func (s *sqliteStore) OnJobDone(id uuid.UUID, workflow string, logs []*engine.Lo
 
 	return tx.Commit()
 }
+
+func (s *sqliteStore) Recover() ([]engine.JobLogInfo, error) {
+	db, err := sql.Open("sqlite3", s.DSN)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	statement := `
+	SELECT uuid, workflow, log
+	FROM jobs_running
+	ORDER BY uuid ASC, timestamp ASC, rowid ASC
+	`
+
+	rows, err := db.Query(statement)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runningJobs []engine.JobLogInfo
+	var current engine.JobLogInfo
+	var logsByStep map[string]*engine.LogEntry
+
+	flushCurrent := func() {
+		if current.ID == uuid.Nil {
+			return
+		}
+		current.Logs = make([]*engine.LogEntry, 0, len(logsByStep))
+		for _, v := range logsByStep {
+			current.Logs = append(current.Logs, v)
+		}
+		runningJobs = append(runningJobs, current)
+	}
+
+	for rows.Next() {
+		var id uuid.UUID
+		var workflow string
+		var data []byte
+		err = rows.Scan(&id, &workflow, &data)
+		if err != nil {
+			return nil, err
+		}
+		if current.ID != id {
+			flushCurrent()
+			current.ID = id
+			current.Workflow = workflow
+			logsByStep = make(map[string]*engine.LogEntry)
+		}
+		logEntries, err := decodeLogEntries(data)
+		if err != nil {
+			return nil, err
+		}
+		for _, logEntry := range logEntries {
+			logsByStep[logEntry.Step] = logEntry
+		}
+	}
+	flushCurrent()
+	err = rows.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	return runningJobs, nil
+}

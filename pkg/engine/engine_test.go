@@ -21,6 +21,9 @@ func (s *nopStore) Update(id uuid.UUID, workflow string, logs []*LogEntry) error
 func (s *nopStore) GetRunningJobLogs(id uuid.UUID) ([]*LogEntry, error)             { return nil, nil }
 func (s *nopStore) GetCompletedJobLogs(id uuid.UUID) ([]*LogEntry, error)           { return nil, nil }
 func (s *nopStore) OnJobDone(id uuid.UUID, workflow string, logs []*LogEntry) error { return nil }
+func (s *nopStore) Recover() ([]JobLogInfo, error) {
+	return nil, nil
+}
 
 type nopBus struct {
 	messages []map[string]json.RawMessage
