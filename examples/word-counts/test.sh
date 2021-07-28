@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 DIR="./examples/word-counts"
 AMQP_SERVER=${AMQP_SERVER-"amqp://guest:guest@localhost:5672/"}
 export AMQP_SERVER
@@ -37,9 +36,9 @@ function element_in_list() {
     local xarr=("$@")
     for x in "${xarr[@]}"; do
         xunquote=$(echo "${x}" | sed -e 's/^"//' -e 's/"$//')
-	if [ "${xunquote}" == "${xvalue}" ]; then
-	   return 0
-	fi
+        if [ "${xunquote}" = "${xvalue}" ]; then
+            return 0
+        fi
     done
     return 1
 }
@@ -47,7 +46,7 @@ function element_in_list() {
 # ensure workflow-manager is up
 for i in $(seq 1 10); do
     curl -s "http://localhost:8080/api/workflows"
-    if [ $? == 0 ]; then
+    if [ "$?" -eq 0 ]; then
         break
     fi
     sleep 1
@@ -55,8 +54,8 @@ done
 
 # wait for the worker queues to be registered
 for i in $(seq 1 10); do
-    queue_names=( $(curl -s  http://guest:guest@localhost:15672/api/queues | jq ".[] | .name") )
-    if [ ${#queue_names[@]} -eq 5 ]; then
+    queue_names=($(curl -s http://guest:guest@localhost:15672/api/queues | jq ".[] | .name"))
+    if [ ${#queue_names[@]} -ge 5 ]; then
         break
     fi
     sleep 1
@@ -74,9 +73,14 @@ JOB_ID=$(echo "${CREATE}" | jq .id | sed -e 's/^"//' -e 's/"$//')
 
 # wait until it is complete
 for i in $(seq 1 10); do
-    completed=( $(curl -s "http://localhost:8080/api/job/${JOB_ID}" | jq ".completed | .[] | .name") )
+    job_status=$(curl -s -f "http://localhost:8080/api/job/${JOB_ID}")
+    if [ "$?" -ne 0 ]; then
+        echo "[OK]"
+        exit 0
+    fi
+    completed=($(echo "${job_status}" | jq ".completed | .[] | .name"))
     element_in_list "__end__" "${completed[@]}"
-    if [ "$?" == 0 ]; then
+    if [ "$?" -eq 0 ]; then
         echo "[OK]"
         exit 0
     fi
