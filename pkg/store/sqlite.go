@@ -37,11 +37,21 @@ func NewSqliteStore(filename string) (engine.JobStore, error) {
 
 func (s *sqliteStore) schemaInit() error {
 	statement := `
-	CREATE TABLE IF NOT EXISTS jobs_running (timestamp INTEGER, uuid BLOB(16), workflow TEXT, log BLOB);
+	CREATE TABLE IF NOT EXISTS jobs_running (
+		timestamp INTEGER,
+		uuid BLOB(16),
+		workflow TEXT,
+		log BLOB
+	);
 	CREATE INDEX IF NOT EXISTS jr_time_ix on jobs_running (timestamp);
 	CREATE INDEX IF NOT EXISTS jr_uuid_ix on jobs_running (uuid);
 
-	CREATE TABLE IF NOT EXISTS jobs_completed (timestamp INTEGER, uuid BLOB(16) PRIMARY KEY, workflow TEXT, log BLOB) WITHOUT ROWID;
+	CREATE TABLE IF NOT EXISTS jobs_completed (
+		timestamp INTEGER,
+		uuid BLOB(16) PRIMARY KEY,
+		workflow TEXT,
+		log BLOB
+	) WITHOUT ROWID;
 	CREATE INDEX IF NOT EXISTS jc_time_ix on jobs_running (timestamp);
 	CREATE INDEX IF NOT EXISTS jc_wrkf_ix on jobs_running (workflow);
 	`
