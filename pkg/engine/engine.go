@@ -45,13 +45,13 @@ type WorkflowEngine interface {
 
 type engine struct {
 	mbus      MessageBus
-	store     ItemStore
+	store     JobStore
 	workflows map[string]*workflowState
 	jobs      map[uuid.UUID]*jobState
 	mutex     sync.Mutex
 }
 
-func NewWorkflowEngine(mbus MessageBus, store ItemStore) WorkflowEngine {
+func NewWorkflowEngine(mbus MessageBus, store JobStore) WorkflowEngine {
 	return &engine{
 		mbus:      mbus,
 		store:     store,
