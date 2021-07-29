@@ -71,7 +71,7 @@ plus an additional json payload with application specific information;
 
 This protocol provides for at-least-once semantics.
 
-## use cases
+## Use cases
 
 The expected use case is of an application where the user triggers a process
 that doesn't return immediately and should be accomplished as a sequence of
@@ -80,12 +80,18 @@ workers themselves.
 
 The goal is to provide the functionality required to orchestrate micro-services without devolving into a full blown business process management (BPM) tool.
 
-## workers
+The current functionality is targeted at scenarios where at-least-once semantics are desired. The workflow-manager supports parallelism (multiple steps of a job active at a time) and it is expected that multiple worker processes can listen to the same queue.
+
+Rollback style functionality is not supported.
+
+There are several tools available that can manage workflows with rollback semantics but they are signficanly more complex and impose significant requirements on the application code. The main motivation for this tool is that the only requiremnts on a worker is that it can receive requests on a message queue.
+
+## Workers
 
 The sub-directory ```pyworker``` contains a python library that is used in
 the example applications.
 
-## json message processing
+## JSON message processing
 
 Workflow processing steps can have more than once ancestor. In this case the
 json dictionary from the multiple steps is merged such that if a given key is
@@ -130,3 +136,14 @@ These subjobs are expected to return values in the same json dictionary key.
 Which are then aggregated at the end of the _task_. If the subtasks do not
 transform the json messages, one obtains back the original message at the top
 level.
+
+## Persistency
+
+Received messages are logged to storage (sqlite3) and the state of running jobs can be recreated from the database on restart.
+
+## TODOs
+
+Additional message bus support:
+
+* Kafka
+* gRPC / REST using plain vanilla HTTP channels
