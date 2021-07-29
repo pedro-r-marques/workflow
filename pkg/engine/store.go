@@ -12,8 +12,8 @@ type JobLogInfo struct {
 
 type JobStore interface {
 	Update(id uuid.UUID, workflow string, logs []*LogEntry) error
-	GetRunningJobLogs(id uuid.UUID) ([]*LogEntry, error)
-	GetCompletedJobLogs(id uuid.UUID) ([]*LogEntry, error)
+	GetRunningJobLogs(id uuid.UUID) (*JobLogInfo, error)
+	GetCompletedJobLogs(id uuid.UUID) (*JobLogInfo, error)
 	OnJobDone(id uuid.UUID, workflow string, logs []*LogEntry) error
 	Recover() ([]JobLogInfo, error)
 }

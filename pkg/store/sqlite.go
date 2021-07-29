@@ -87,7 +87,7 @@ func decodeLogEntries(data []byte) ([]*engine.LogEntry, error) {
 	return logEntries, err
 }
 
-func (s *sqliteStore) getJobLogs(db *sql.DB, table string, id uuid.UUID) ([]*engine.LogEntry, error) {
+func (s *sqliteStore) getJobLogs(db *sql.DB, table string, id uuid.UUID) (*engine.JobLogInfo, error) {
 	order := "timestamp ASC"
 	if table == "jobs_running" {
 		order += ", rowid ASC"
@@ -125,10 +125,18 @@ func (s *sqliteStore) getJobLogs(db *sql.DB, table string, id uuid.UUID) ([]*eng
 	for _, l := range logsByStep {
 		logs = append(logs, l)
 	}
-	return logs, nil
+
+	statement = fmt.Sprintf("SELECT DISTINCT workflow FROM %s WHERE uuid = ?", table)
+	row := db.QueryRow(statement, id)
+	var workflow string
+	if err := row.Scan(&workflow); err != nil {
+		return nil, err
+	}
+	jobInfo := &engine.JobLogInfo{ID: id, Workflow: workflow, Logs: logs}
+	return jobInfo, nil
 }
 
-func (s *sqliteStore) GetRunningJobLogs(id uuid.UUID) ([]*engine.LogEntry, error) {
+func (s *sqliteStore) GetRunningJobLogs(id uuid.UUID) (*engine.JobLogInfo, error) {
 	db, err := sql.Open("sqlite3", s.DSN)
 	if err != nil {
 		return nil, err
@@ -137,7 +145,7 @@ func (s *sqliteStore) GetRunningJobLogs(id uuid.UUID) ([]*engine.LogEntry, error
 	return s.getJobLogs(db, "jobs_running", id)
 }
 
-func (s *sqliteStore) GetCompletedJobLogs(id uuid.UUID) ([]*engine.LogEntry, error) {
+func (s *sqliteStore) GetCompletedJobLogs(id uuid.UUID) (*engine.JobLogInfo, error) {
 	db, err := sql.Open("sqlite3", s.DSN)
 	if err != nil {
 		return nil, err

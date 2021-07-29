@@ -18,8 +18,8 @@ type nopStore struct {
 }
 
 func (s *nopStore) Update(id uuid.UUID, workflow string, logs []*LogEntry) error    { return nil }
-func (s *nopStore) GetRunningJobLogs(id uuid.UUID) ([]*LogEntry, error)             { return nil, nil }
-func (s *nopStore) GetCompletedJobLogs(id uuid.UUID) ([]*LogEntry, error)           { return nil, nil }
+func (s *nopStore) GetRunningJobLogs(id uuid.UUID) (*JobLogInfo, error)             { return nil, nil }
+func (s *nopStore) GetCompletedJobLogs(id uuid.UUID) (*JobLogInfo, error)           { return nil, nil }
 func (s *nopStore) OnJobDone(id uuid.UUID, workflow string, logs []*LogEntry) error { return nil }
 func (s *nopStore) Recover() ([]JobLogInfo, error) {
 	return nil, nil
@@ -219,6 +219,15 @@ func TestEndTask(t *testing.T) {
 
 	m2 := <-mock.ch
 	require.Equal(t, jobID.String()+correlationIdSepToken+"s3", m2.correlationId)
+}
+
+// Ensure that the state machine advances if there are no task elements.
+func TestTaskSkip(t *testing.T) {
+
+}
+
+func TestDuplicateResponse(t *testing.T) {
+
 }
 
 func TestJobList(t *testing.T) {

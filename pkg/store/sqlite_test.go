@@ -68,10 +68,11 @@ func TestUpdateAndRead(t *testing.T) {
 	err = store.Update(jobID, "example-workflow", logs2)
 	require.NoError(t, err)
 
-	rdLogs, err := store.GetRunningJobLogs(jobID)
+	jobInfo, err := store.GetRunningJobLogs(jobID)
 	assert.NoError(t, err)
-	require.Len(t, rdLogs, 2)
-	require.ElementsMatch(t, logs2, rdLogs)
+	require.Equal(t, "example-workflow", jobInfo.Workflow)
+	require.Len(t, jobInfo.Logs, 2)
+	require.ElementsMatch(t, logs2, jobInfo.Logs)
 }
 
 func TestJobDone(t *testing.T) {
@@ -102,9 +103,9 @@ func TestJobDone(t *testing.T) {
 
 	indices := []int{3, 5, 7}
 	for _, ix := range indices {
-		logs, err := store.GetRunningJobLogs(jobIDs[ix])
+		jobInfo, err := store.GetRunningJobLogs(jobIDs[ix])
 		require.NoError(t, err)
-		err = store.OnJobDone(jobIDs[ix], "example-workflow", logs)
+		err = store.OnJobDone(jobIDs[ix], "example-workflow", jobInfo.Logs)
 		require.NoError(t, err)
 	}
 
@@ -117,9 +118,9 @@ func TestJobDone(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, ix := range indices {
-		logs, err := store.GetCompletedJobLogs(jobIDs[ix])
+		jobInfo, err := store.GetCompletedJobLogs(jobIDs[ix])
 		require.NoError(t, err)
-		require.Len(t, logs, 1)
+		require.Len(t, jobInfo.Logs, 1)
 	}
 }
 

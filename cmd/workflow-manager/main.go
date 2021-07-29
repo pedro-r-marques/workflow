@@ -9,11 +9,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/pedro-r-marques/workflow/pkg/api"
 	"github.com/pedro-r-marques/workflow/pkg/config"
 	"github.com/pedro-r-marques/workflow/pkg/engine"
 	"github.com/pedro-r-marques/workflow/pkg/mbus"
+	"github.com/pedro-r-marques/workflow/pkg/store"
 )
 
 type options struct {
@@ -22,6 +24,7 @@ type options struct {
 	AMQPServer string
 	Config     string
 	HTMLDir    string
+	Database   string
 }
 
 func (opt *options) Register() {
@@ -37,6 +40,7 @@ func (opt *options) Register() {
 	confPath := path.Join(execDir, "./etc/workflow-manager.conf")
 	flag.StringVar(&opt.Config, "config", confPath, "Workflow configuration file")
 	flag.StringVar(&opt.HTMLDir, "html", path.Join(execDir, "static"), "Directory containing html/js debug UI")
+	flag.StringVar(&opt.Database, "db", "", "Job status Database")
 }
 
 func configure(wrkEngine engine.WorkflowEngine, mbus engine.MessageBus, workflows []config.Workflow) {
@@ -73,10 +77,31 @@ func main() {
 	mux := http.NewServeMux()
 
 	mbus := mbus.NewRabbitMQBus(opt.AMQPServer)
-	wrkEngine := engine.NewWorkflowEngine(mbus, nil)
+	var storage engine.JobStore
+	if opt.Database != "" {
+		switch {
+		case strings.HasPrefix(opt.Database, "sqlite3:"):
+			filename := opt.Database[len("sqlite3:"):]
+			if strings.HasPrefix(filename, "//") {
+				filename = filename[1:]
+			}
+			storage, err = store.NewSqliteStore(filename)
+			if err != nil {
+				log.Fatal(err)
+			}
+		default:
+			log.Fatalf("unsupported database uri: %s", opt.Database)
+		}
+	}
+
+	wrkEngine := engine.NewWorkflowEngine(mbus, storage)
 	mbus.SetHandler(wrkEngine.OnEvent)
 
 	configure(wrkEngine, mbus, workflows)
+
+	if storage != nil {
+		wrkEngine.RecoverRunningJobs()
+	}
 
 	apiServer := api.NewApiServer(wrkEngine)
 	mux.Handle("/api/", apiServer)

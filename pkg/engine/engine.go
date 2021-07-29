@@ -41,6 +41,8 @@ type WorkflowEngine interface {
 	ListWorkflowJobs(workflow string) ([]uuid.UUID, error)
 	ListJobs() []uuid.UUID
 	JobStatus(id uuid.UUID) ([]JobStatusEntry, []JobStatusEntry, error)
+
+	RecoverRunningJobs() error
 }
 
 type engine struct {
@@ -49,6 +51,21 @@ type engine struct {
 	workflows map[string]*workflowState
 	jobs      map[uuid.UUID]*jobState
 	mutex     sync.Mutex
+}
+
+type changeList struct {
+	logs []*LogEntry
+}
+
+func (c *changeList) add(LogEntry *LogEntry) {
+	c.logs = append(c.logs, LogEntry)
+}
+
+func (c *changeList) clear() {
+	c.logs = nil
+}
+func (c *changeList) isEmpty() bool {
+	return len(c.logs) == 0
 }
 
 func NewWorkflowEngine(mbus MessageBus, store JobStore) WorkflowEngine {
@@ -179,7 +196,7 @@ func makeTaskMessage(inputData map[string]json.RawMessage, taskConfig *config.Ta
 	return msg
 }
 
-func (e *engine) createTask(job *jobState, nodeName, taskName string, data map[string]json.RawMessage) error {
+func (e *engine) createTask(job *jobState, nodeName, taskName string, data map[string]json.RawMessage, changes *changeList) error {
 	taskConfig := getTaskConfig(&job.Workflow.Config, taskName)
 	elementsRaw, exists := data[taskConfig.ItemListKey]
 	if !exists {
@@ -195,11 +212,14 @@ func (e *engine) createTask(job *jobState, nodeName, taskName string, data map[s
 		taskIDs = append(taskIDs, id)
 	}
 
-	job.Open = append(job.Open, &LogEntry{
+	logEntry := &LogEntry{
 		Step:     nodeName,
 		Start:    time.Now(),
 		Children: taskIDs,
-	})
+		Data:     jsonMustMarshal(data),
+	}
+	job.Open = append(job.Open, logEntry)
+	changes.add(logEntry)
 
 	for i, elementRaw := range jsonElementList {
 		id := taskIDs[i]
@@ -225,46 +245,46 @@ func (e *engine) createTask(job *jobState, nodeName, taskName string, data map[s
 
 func (e *engine) workflowStart(job *jobState, data map[string]json.RawMessage) error {
 	wrk := job.Workflow
-	succ, ok := wrk.NodeSuccessors[config.WorkflowStart]
-	if !ok {
+	if _, ok := wrk.NodeSuccessors[config.WorkflowStart]; !ok {
 		return fmt.Errorf("invalid workflow: %s", wrk.Name)
 	}
 
+	logEntry := &LogEntry{
+		Step:  config.WorkflowStart,
+		Start: time.Now(),
+		End:   time.Now(),
+		Data:  jsonMustMarshal(data),
+	}
+
+	var changes changeList
+	changes.add(logEntry)
 	job.mutex.Lock()
 	defer job.mutex.Unlock()
 
-	for nsuccessors := []*workflowNode{}; len(succ) > 0; succ, nsuccessors = nsuccessors, []*workflowNode{} {
-		for _, node := range succ {
-			if node.Task == "" {
-				log := &LogEntry{
-					Step:  node.Name,
-					Start: time.Now(),
-				}
-				job.Open = append(job.Open, log)
-				correlationId, msg := makeMessage(job.ID, node.Name, data)
-				e.mbus.SendMsg(wrk.VHost, node.Queue, correlationId, msg)
-			} else {
-				err := e.createTask(job, node.Name, node.Task, data)
-				if err == errTaskNop {
-					// transition to successor of this node.
-					job.Closed[node.Name] = &LogEntry{
-						Step:  node.Name,
-						Start: time.Now(),
-						Data:  jsonMustMarshal(data),
-					}
-					nsuccessors = append(nsuccessors, wrk.NodeSuccessors[node.Name]...)
-				}
-			}
+	job.Closed[config.WorkflowStart] = logEntry
+
+	e.advanceStateLocked(job, config.WorkflowStart, &changes)
+
+	if e.store != nil {
+		if err := e.store.Update(job.ID, job.Workflow.Name, changes.logs); err != nil {
+			log.Print(err)
 		}
 	}
+
 	return nil
 }
 
 func (e *engine) Create(workflow string, id uuid.UUID, dict map[string]json.RawMessage) error {
-	if _, exists := e.jobs[id]; exists {
+	e.mutex.Lock()
+	_, exists := e.jobs[id]
+	e.mutex.Unlock()
+	if exists {
 		return fmt.Errorf("duplicate item id: %v", id)
 	}
+
+	e.mutex.Lock()
 	wstate, exists := e.workflows[workflow]
+	e.mutex.Unlock()
 	if !exists {
 		return fmt.Errorf("unknown workflow: %s", workflow)
 	}
@@ -312,8 +332,17 @@ func mergeJsonDataDependents(jsonData [][]byte) map[string]json.RawMessage {
 	return merged
 }
 
+func inOpenList(job *jobState, nodeName string) bool {
+	for _, entry := range job.Open {
+		if entry.Step == nodeName {
+			return true
+		}
+	}
+	return false
+}
+
 // called with mutex locked
-func (e *engine) advanceStateLocked(job *jobState, stepName string, changes []*LogEntry) error {
+func (e *engine) advanceStateLocked(job *jobState, stepName string, changes *changeList) error {
 	wrk := job.Workflow
 	succ, ok := wrk.NodeSuccessors[stepName]
 	if !ok {
@@ -322,6 +351,13 @@ func (e *engine) advanceStateLocked(job *jobState, stepName string, changes []*L
 
 	for nsuccessors := []*workflowNode{}; len(succ) > 0; succ, nsuccessors = nsuccessors, []*workflowNode{} {
 		for _, node := range succ {
+			if _, present := job.Closed[node.Name]; present {
+				nsuccessors = append(nsuccessors, wrk.NodeSuccessors[node.Name]...)
+				continue
+			}
+			if inOpenList(job, node.Name) {
+				continue
+			}
 			done, jsonData := dependencyCheck(job, node)
 			if !done {
 				continue
@@ -342,12 +378,14 @@ func (e *engine) advanceStateLocked(job *jobState, stepName string, changes []*L
 				correlationId, msg := makeMessage(job.ID, node.Name, data)
 				e.mbus.SendMsg(wrk.VHost, node.Queue, correlationId, msg)
 			} else {
-				err := e.createTask(job, node.Name, node.Task, data)
+				err := e.createTask(job, node.Name, node.Task, data, changes)
 				if err == errTaskNop {
-					job.Closed[node.Name] = &LogEntry{
+					logEntry := &LogEntry{
 						Step:  node.Name,
 						Start: time.Now(),
 					}
+					job.Closed[node.Name] = logEntry
+					changes.add(logEntry)
 					nsuccessors = append(nsuccessors, wrk.NodeSuccessors[node.Name]...)
 				}
 			}
@@ -356,28 +394,39 @@ func (e *engine) advanceStateLocked(job *jobState, stepName string, changes []*L
 	return nil
 }
 
-func (e *engine) advanceState(job *jobState, stepName string, changes []*LogEntry) error {
+func (e *engine) advanceState(job *jobState, stepName string, changes *changeList) error {
 	job.mutex.Lock()
 	defer job.mutex.Unlock()
 	return e.advanceStateLocked(job, stepName, changes)
 }
 
-func (e *engine) completed(job *jobState, data map[string]json.RawMessage, changes []*LogEntry) {
-	log := LogEntry{
+func (e *engine) completed(job *jobState, data map[string]json.RawMessage, changes *changeList) {
+	logEntry := &LogEntry{
 		Step:  config.WorkflowEnd,
 		Start: time.Now(),
+		End:   time.Now(),
 		Data:  jsonMustMarshal(data),
 	}
 
-	_ = append(changes, &log)
-	job.Closed[config.WorkflowEnd] = &log
+	job.Closed[config.WorkflowEnd] = logEntry
 
 	job.Workflow.onJobDone(job)
 
 	if job.watcher != nil {
-		job.watcher <- log
+		job.watcher <- *logEntry
 		close(job.watcher)
 	}
+
+	if e.store != nil {
+		logs := make([]*LogEntry, 0, len(job.Closed))
+		for _, v := range job.Closed {
+			logs = append(logs, v)
+		}
+		e.store.OnJobDone(job.ID, job.Workflow.Name, logs)
+	}
+
+	changes.clear()
+
 	if job.Parent != nil {
 		pieces := strings.Split(job.Workflow.Name, "/")
 		nodeName := pieces[len(pieces)-1]
@@ -451,7 +500,7 @@ func mergeTaskJsonData(jsonData [][]byte, taskConfig *config.Task) []byte {
 func (e *engine) maybeTaskEnd(job *jobState, nodeName, taskName string) {
 	var done bool
 	var jsonData [][]byte
-	changes := make([]*LogEntry, 1, 2)
+	var changes changeList
 
 	job.mutex.Lock()
 	defer job.mutex.Unlock()
@@ -465,7 +514,7 @@ func (e *engine) maybeTaskEnd(job *jobState, nodeName, taskName string) {
 				logEntry.Data = mergeTaskJsonData(
 					jsonData, getTaskConfig(&job.Workflow.Config, taskName))
 				job.Closed[logEntry.Step] = logEntry
-				changes[0] = logEntry
+				changes.add(logEntry)
 			}
 			break
 		}
@@ -474,8 +523,11 @@ func (e *engine) maybeTaskEnd(job *jobState, nodeName, taskName string) {
 		return
 	}
 
-	if err := e.advanceStateLocked(job, nodeName, changes); err != nil {
+	if err := e.advanceStateLocked(job, nodeName, &changes); err != nil {
 		log.Print(err)
+	}
+	if e.store != nil && !changes.isEmpty() {
+		e.store.Update(job.ID, job.Workflow.Name, changes.logs)
 	}
 }
 
@@ -535,15 +587,15 @@ func (e *engine) OnEvent(correlationId string, body []byte) error {
 		job.watcher <- *logEntry
 	}
 
-	changes := make([]*LogEntry, 1, 2)
-	changes[0] = logEntry
+	var changes changeList
+	changes.add(logEntry)
 
-	if err := e.advanceState(job, logEntry.Step, changes); err != nil {
+	if err := e.advanceState(job, logEntry.Step, &changes); err != nil {
 		return err
 	}
 
-	if e.store != nil {
-		if err := e.store.Update(job.ID, job.Workflow.Name, changes); err != nil {
+	if e.store != nil && !changes.isEmpty() {
+		if err := e.store.Update(job.ID, job.Workflow.Name, changes.logs); err != nil {
 			log.Print(err)
 		}
 	}
@@ -638,4 +690,180 @@ func (e *engine) JobStatus(id uuid.UUID) ([]JobStatusEntry, []JobStatusEntry, er
 	}
 
 	return open, closed, nil
+}
+
+func getJobStepTaskName(job *jobState, logEntry *LogEntry) (string, error) {
+	for _, step := range job.Workflow.Config.Steps {
+		if step.Name == logEntry.Step {
+			return step.Task, nil
+		}
+	}
+	return "", fmt.Errorf("step %s not found", logEntry.Step)
+}
+
+func getJobTaskCreateData(job *jobState, taskName string, logEntry *LogEntry) ([]json.RawMessage, error) {
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(logEntry.Data, &data); err != nil {
+		return nil, err
+	}
+	taskConfig := getTaskConfig(&job.Workflow.Config, taskName)
+	elementsRaw, exists := data[taskConfig.ItemListKey]
+	if !exists {
+		return nil, errTaskNop
+	}
+	var jsonElementList []json.RawMessage
+	if err := json.Unmarshal(elementsRaw, &jsonElementList); err != nil {
+		return nil, errTaskNop
+	}
+	return jsonElementList, nil
+}
+
+func (e *engine) recreateTask(job *jobState, stepName, taskName string, jsonElementList []json.RawMessage, ix int, tid uuid.UUID) error {
+	wstate := job.Workflow.locateTaskState(stepName, taskName)
+
+	data, err := json.Marshal(jsonElementList[ix])
+	if err != nil {
+		return err
+	}
+
+	logEntry := &LogEntry{
+		Step:  config.WorkflowStart,
+		Start: time.Now(),
+		End:   time.Now(),
+		Data:  data,
+	}
+
+	task := &jobState{
+		ID:       tid,
+		Workflow: wstate,
+		Closed: map[string]*LogEntry{
+			config.WorkflowStart: logEntry,
+		},
+		Task:   taskName,
+		Parent: job,
+	}
+	e.jobs[tid] = task
+	wstate.onJobCreate(task)
+	return nil
+}
+
+// recover a task based on storage logs
+// the task may be either running or terminated
+func (e *engine) recoverTask(job *jobState, stepName, taskName string, taskInfo *JobLogInfo) error {
+	wstate := job.Workflow.locateTaskState(stepName, taskName)
+	var open []*LogEntry
+	closed := make(map[string]*LogEntry, len(taskInfo.Logs))
+	for _, l := range taskInfo.Logs {
+		if l.End.IsZero() {
+			open = append(open, l)
+		} else {
+			closed[l.Step] = l
+		}
+	}
+	task := &jobState{
+		ID:       taskInfo.ID,
+		Workflow: wstate,
+		Open:     open,
+		Closed:   closed,
+		Task:     taskName,
+		Parent:   job,
+	}
+	e.jobs[taskInfo.ID] = task
+
+	wstate.onJobCreate(task)
+	return nil
+}
+
+func (e *engine) RecoverRunningJobs() error {
+	jobInfo, err := e.store.Recover()
+	if err != nil {
+		return err
+	}
+	jobInfoByID := make(map[uuid.UUID]*JobLogInfo, len(jobInfo))
+
+	topLevel := make([]*JobLogInfo, 0, len(jobInfo))
+	taskIDs := make([]uuid.UUID, 0, len(jobInfo))
+
+	for i := 0; i < len(jobInfo); i++ {
+		ji := &jobInfo[i]
+		jobInfoByID[ji.ID] = ji
+
+		if _, exists := e.workflows[ji.Workflow]; exists {
+			topLevel = append(topLevel, ji)
+		}
+	}
+
+	for _, ji := range topLevel {
+		wstate := e.workflows[ji.Workflow]
+		job := &jobState{
+			ID:       ji.ID,
+			Workflow: wstate,
+			Closed:   make(map[string]*LogEntry),
+		}
+
+		for _, l := range ji.Logs {
+			if l.End.IsZero() {
+				job.Open = append(job.Open, l)
+			} else {
+				job.Closed[l.Step] = l
+				continue
+			}
+
+			taskName, err := getJobStepTaskName(job, l)
+			if err != nil {
+				log.Print(err)
+				continue
+			}
+			if taskName == "" {
+				continue
+			}
+			var jsonElementList []json.RawMessage
+
+			// read in completed tasks that we may depend on
+			for ix, tid := range l.Children {
+				if jobInfo, inMap := jobInfoByID[tid]; inMap {
+					e.recoverTask(job, l.Step, taskName, jobInfo)
+					continue
+				}
+				// restore from storage log.
+				if jobInfo, err := e.store.GetCompletedJobLogs(tid); err == nil {
+					e.recoverTask(job, l.Step, taskName, jobInfo)
+					continue
+				}
+
+				// missing task must be recreated
+				if jsonElementList == nil {
+					jsonElementList, err = getJobTaskCreateData(job, taskName, l)
+					if err != nil {
+						log.Print(err)
+						continue
+					}
+				}
+				e.recreateTask(job, l.Step, taskName, jsonElementList, ix, tid)
+			}
+			taskIDs = append(taskIDs, l.Children...)
+		}
+
+		e.jobs[ji.ID] = job
+	}
+
+	// advance state machine for top level jobs
+	for _, ji := range topLevel {
+		job := e.jobs[ji.ID]
+		var nopChanges changeList
+		e.advanceStateLocked(job, config.WorkflowStart, &nopChanges)
+	}
+
+	// advance state machine for tasks
+	for _, tid := range taskIDs {
+		task, exists := e.jobs[tid]
+		if !exists {
+			log.Printf("unable to recover task %v", tid)
+			continue
+		}
+		var nopChanges changeList
+		e.advanceStateLocked(task, config.WorkflowStart, &nopChanges)
+	}
+
+	return nil
 }
