@@ -3,6 +3,17 @@ function makeJobHRef(entry) {
     return href;
 }
 
+function addJobRowWithStatus(nlist, jobID, status) {
+    let tr = document.createElement("tr");
+    nlist.appendChild(tr);
+    tr.addEventListener("click", function (event) {
+        window.location.href = makeJobHRef(jobID);
+    })
+
+    tr.appendChild(document.createElement("td")).innerHTML = jobID;
+    tr.appendChild(document.createElement("td")).innerHTML = status;
+}
+
 function displayJobs() {
     const urlParams = new URLSearchParams(window.location.search);
     let url = urlParams.get("name");
@@ -14,19 +25,19 @@ function displayJobs() {
         .then(function (response) {
             let current = document.querySelector('#job-list');
             let nlist = current.cloneNode(false);
-            response["jobs"].forEach(entry => {
-                let tr = document.createElement("tr");
-                nlist.appendChild(tr);
-                tr.addEventListener("click", function (event) {
-                    window.location.href = makeJobHRef(entry);
-                })
-                let td = document.createElement("td");
-                tr.appendChild(td);
-                td.innerHTML = entry;
-            });
-    let parent = current.parentNode;
-    parent.replaceChild(nlist, current);
-});
+            if ("running" in response && response["running"] !== null) {
+                response["running"].forEach(entry => {
+                    addJobRowWithStatus(nlist, entry, "running")
+                });
+            }
+            if ("completed" in response && response["completed"] !== null) {
+                response["completed"].forEach(entry => {
+                    addJobRowWithStatus(nlist, entry, "completed")
+                });
+            }
+            let parent = current.parentNode;
+            parent.replaceChild(nlist, current);
+        });
 }
 
 function initialize() {

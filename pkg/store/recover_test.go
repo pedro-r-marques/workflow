@@ -57,6 +57,9 @@ func (ro *readOnlyStore) GetCompletedJobLogs(id uuid.UUID) (*engine.JobLogInfo, 
 func (ro *readOnlyStore) Recover() ([]engine.JobLogInfo, error) {
 	return ro.store.Recover()
 }
+func (ro *readOnlyStore) ListCompletedJobs(workflow string, intervalMins int64) ([]uuid.UUID, error) {
+	return ro.store.ListCompletedJobs(workflow, intervalMins)
+}
 
 func jsonMustMarshal(data map[string]json.RawMessage) []byte {
 	result, err := json.Marshal(data)
@@ -75,10 +78,10 @@ func cloneSqliteStore(t *testing.T, src *sqliteStore) engine.JobStore {
 	src.db.Close()
 
 	fp, err := os.Open(src.Filename)
-	defer fp.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer fp.Close()
 
 	_, err = io.Copy(tmpfile, fp)
 	if err != nil {

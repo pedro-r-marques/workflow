@@ -22,15 +22,22 @@ type sqliteStore struct {
 	DSN      string
 	db       *sql.DB // sqlite3 supports a single write connection
 	mutex    sync.Mutex
+	sysClock func() time.Time
 }
 
 func NewSqliteStore(filename string) (engine.JobStore, error) {
-	dsn := fmt.Sprintf("file://%s?cache=shared", filename)
+	dsn := fmt.Sprintf("file:%s?cache=shared", filename)
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, err
 	}
-	store := &sqliteStore{Filename: filename, DSN: dsn, db: db}
+	defaultClock := func() time.Time { return time.Now() }
+	store := &sqliteStore{
+		Filename: filename,
+		DSN:      dsn,
+		db:       db,
+		sysClock: defaultClock,
+	}
 	return store, store.schemaInit()
 }
 
@@ -51,8 +58,8 @@ func (s *sqliteStore) schemaInit() error {
 		workflow TEXT,
 		log BLOB
 	) WITHOUT ROWID;
-	CREATE INDEX IF NOT EXISTS jc_time_ix on jobs_running (timestamp);
-	CREATE INDEX IF NOT EXISTS jc_wrkf_ix on jobs_running (workflow);
+	CREATE INDEX IF NOT EXISTS jc_time_ix on jobs_completed (timestamp);
+	CREATE INDEX IF NOT EXISTS jc_wrkf_ix on jobs_completed (workflow);
 	`
 	_, err := s.db.Exec(statement)
 	return err
@@ -66,7 +73,7 @@ func (s *sqliteStore) Update(id uuid.UUID, workflow string, logs []*engine.LogEn
 		return err
 	}
 
-	ts := time.Now().Unix()
+	ts := s.sysClock().Unix()
 
 	statement := `
 	INSERT INTO jobs_running (timestamp, uuid, workflow, log) VALUES(?, ?, ?, ?)
@@ -161,7 +168,7 @@ func (s *sqliteStore) OnJobDone(id uuid.UUID, workflow string, logs []*engine.Lo
 		return err
 	}
 
-	ts := time.Now().Unix()
+	ts := s.sysClock().Unix()
 
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -244,4 +251,55 @@ func (s *sqliteStore) Recover() ([]engine.JobLogInfo, error) {
 	}
 
 	return runningJobs, nil
+}
+
+func (s *sqliteStore) ListCompletedJobs(workflow string, intervalMins int64) ([]uuid.UUID, error) {
+	db, err := sql.Open("sqlite3", s.DSN)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	var rows *sql.Rows
+
+	if intervalMins > 0 {
+		since := s.sysClock().Add(time.Duration(-intervalMins) * time.Minute).Unix()
+		statement := `
+		SELECT uuid
+		FROM jobs_completed
+		WHERE workflow = ? AND timestamp > ?
+		ORDER BY timestamp DESC
+		`
+		rows, err = db.Query(statement, workflow, since)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		statement := `
+		SELECT uuid
+		FROM jobs_completed
+		WHERE workflow = ?
+		ORDER BY timestamp DESC
+		`
+		rows, err = db.Query(statement, workflow)
+		if err != nil {
+			return nil, err
+		}
+	}
+	defer rows.Close()
+
+	var jobIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		err = rows.Scan(&id)
+		if err != nil {
+			return nil, err
+		}
+		jobIDs = append(jobIDs, id)
+	}
+	err = rows.Err()
+	if err != nil {
+		return nil, err
+	}
+	return jobIDs, nil
 }

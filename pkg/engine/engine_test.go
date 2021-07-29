@@ -24,6 +24,9 @@ func (s *nopStore) OnJobDone(id uuid.UUID, workflow string, logs []*LogEntry) er
 func (s *nopStore) Recover() ([]JobLogInfo, error) {
 	return nil, nil
 }
+func (s *nopStore) ListCompletedJobs(workflow string, intervalMins int64) ([]uuid.UUID, error) {
+	return nil, nil
+}
 
 type nopBus struct {
 	messages []map[string]json.RawMessage
