@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/streadway/amqp"
 
 	"github.com/pedro-r-marques/workflow/pkg/engine"
@@ -118,34 +118,40 @@ func (s *rabbitMQSession) Run() {
 		for isConnected {
 			select {
 			case m := <-deliveryCh:
+				log.Debug().
+					Str("appId", m.AppId).
+					Str("correlationId", m.CorrelationId).
+					RawJSON("payload", m.Body).
+					Msg("recv")
+
 				s.rcvHandler(m.CorrelationId, m.Body)
 
 			case qerr := <-recvErrChan:
-				log.Printf("amqp recv channel error: %v", *qerr)
+				log.Error().Msgf("amqp recv channel error: %v", *qerr)
 				recvChannel, deliveryCh, err = s.recvChannelCreate(connection)
 				if err == nil {
 					recvChannel.NotifyClose(recvErrChan)
 				} else {
-					log.Printf("amqp recv channel reconnect: %v", err)
+					log.Error().Msgf("amqp recv channel reconnect: %v", err)
 					sendChannel.Close()
 					connection.Close()
 					isConnected = false
 				}
 
 			case qerr := <-sendErrChan:
-				log.Printf("amqp send channel error: %v", *qerr)
+				log.Error().Msgf("amqp send channel error: %v", *qerr)
 				sendChannel, err = connection.Channel()
 				if err == nil {
 					sendChannel.NotifyClose(sendErrChan)
 				} else {
-					log.Printf("amqp send channel reconnect: %v", err)
+					log.Error().Msgf("amqp send channel reconnect: %v", err)
 					recvChannel.Close()
 					connection.Close()
 					isConnected = false
 				}
 
 			case qerr := <-connErrChan:
-				log.Printf("amqp connection error: %v", *qerr)
+				log.Error().Msgf("amqp connection error: %v", *qerr)
 				isConnected = false
 			}
 		}
@@ -187,6 +193,13 @@ func (s *rabbitMQSession) SendMsg(qname string, correlationId string, data map[s
 	if err != nil {
 		return fmt.Errorf("RabbitMQ send: %w", err)
 	}
+
+	log.Debug().
+		Str("qname", qname).
+		Str("correlationId", correlationId).
+		RawJSON("payload", body).
+		Msg("send")
+
 	msg := amqp.Publishing{
 		CorrelationId: correlationId,
 		ContentType:   "application/json",

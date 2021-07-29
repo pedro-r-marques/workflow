@@ -6,7 +6,7 @@ export AMQP_SERVER
 
 WPIDS=()
 
-./workflow-manager --config "${DIR}/config.yaml" &
+./workflow-manager --debug --config "${DIR}/config.yaml" &
 WM_PID=$!
 
 workers=(

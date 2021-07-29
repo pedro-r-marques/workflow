@@ -6,7 +6,6 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -29,7 +28,7 @@ func NewSqliteStore(filename string) (engine.JobStore, error) {
 	dsn := fmt.Sprintf("file://%s?cache=shared", filename)
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
-		log.Panic(err)
+		return nil, err
 	}
 	store := &sqliteStore{Filename: filename, DSN: dsn, db: db}
 	return store, store.schemaInit()
