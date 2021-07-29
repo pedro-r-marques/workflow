@@ -24,7 +24,7 @@ func TestListWorkflows(t *testing.T) {
 	w := httptest.NewRecorder()
 	mock := mock_engine.NewMockWorkflowEngine(ctrl)
 	mock.EXPECT().ListWorkflows().Return([]engine.WorkflowInfo{{Name: "example"}})
-	apiSrv := NewApiServer(mock)
+	apiSrv := NewApiServer(mock, nil)
 	req, _ := http.NewRequest(http.MethodGet, "/api/workflows", nil)
 	apiSrv.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -40,7 +40,7 @@ func TestCreateJobIDParamNoBody(t *testing.T) {
 	jobID, _ := uuid.Parse("f557697b-f911-401c-86b7-6d9b62f1f2bb")
 	engine.EXPECT().Create(gomock.Eq("example"), gomock.Eq(jobID), gomock.Any()).Return(nil)
 
-	apiSrv := NewApiServer(engine)
+	apiSrv := NewApiServer(engine, nil)
 	req, _ := http.NewRequest(http.MethodPost, "/api/workflow/example?id=f557697b-f911-401c-86b7-6d9b62f1f2bb", nil)
 	apiSrv.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -71,7 +71,7 @@ func TestCreateJobBodyId(t *testing.T) {
 	}
 	body, err := json.Marshal(msg)
 	assert.NoError(t, err)
-	apiSrv := NewApiServer(engine)
+	apiSrv := NewApiServer(engine, nil)
 	req, _ := http.NewRequest(http.MethodPost, "/api/workflow/example", bytes.NewReader(body))
 	apiSrv.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -90,7 +90,7 @@ func TestCreateJobRandId(t *testing.T) {
 	}
 	body, err := json.Marshal(msg)
 	assert.NoError(t, err)
-	apiSrv := NewApiServer(engine)
+	apiSrv := NewApiServer(engine, nil)
 	req, _ := http.NewRequest(http.MethodPost, "/api/workflow/example", bytes.NewReader(body))
 	apiSrv.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -115,7 +115,7 @@ func TestListJobs(t *testing.T) {
 	jobID := uuid.New()
 	engine.EXPECT().ListJobs().Return([]uuid.UUID{jobID})
 
-	apiSrv := NewApiServer(engine)
+	apiSrv := NewApiServer(engine, nil)
 	req, _ := http.NewRequest(http.MethodGet, "/api/jobs", nil)
 	apiSrv.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)

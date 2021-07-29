@@ -6,7 +6,7 @@ export AMQP_SERVER
 
 WPIDS=()
 
-./workflow-manager --debug --config "${DIR}/config.yaml" &
+./workflow-manager -db sqlite3:wm.db -config "${DIR}/config.yaml" &
 WM_PID=$!
 
 workers=(
@@ -75,8 +75,7 @@ JOB_ID=$(echo "${CREATE}" | jq .id | sed -e 's/^"//' -e 's/"$//')
 for i in $(seq 1 10); do
     job_status=$(curl -s -f "http://localhost:8080/api/job/${JOB_ID}")
     if [ "$?" -ne 0 ]; then
-        echo "[OK]"
-        exit 0
+        break
     fi
     completed=($(echo "${job_status}" | jq ".completed | .[] | .name"))
     element_in_list "__end__" "${completed[@]}"

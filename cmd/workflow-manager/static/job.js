@@ -29,7 +29,7 @@ function showJobStatus(response) {
     let runListElement = document.querySelector("#job-run-list");
     let nRunList = runListElement.cloneNode(false);
     let runEntries = [];
-    if ("running" in response) {
+    if ("running" in response && response["running"] !== null) {
         runEntries = response["running"];
     }
     runEntries.forEach(entry => {
@@ -76,7 +76,7 @@ function showJobStatus(response) {
     let doneListElement = document.querySelector("#job-done-list");
     let nDoneList = doneListElement.cloneNode(false);
     let doneEntries = [];
-    if ("completed" in response) {
+    if ("completed" in response && response["completed"] !== null) {
         doneEntries = response["completed"];
     }
     doneEntries.forEach(entry => {

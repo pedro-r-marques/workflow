@@ -16,4 +16,5 @@ type JobStore interface {
 	GetCompletedJobLogs(id uuid.UUID) (*JobLogInfo, error)
 	OnJobDone(id uuid.UUID, workflow string, logs []*LogEntry) error
 	Recover() ([]JobLogInfo, error)
+	ListCompletedJobs(workflow string, intervalMins int64) ([]uuid.UUID, error)
 }

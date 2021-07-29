@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -168,4 +169,67 @@ func TestRecover(t *testing.T) {
 		require.Len(t, l.Logs, len(steps))
 	}
 	require.ElementsMatch(t, rcvIDs, jobIDs)
+}
+
+func TestListCompleted(t *testing.T) {
+	tmpfile, err := ioutil.TempFile("", "dbfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer os.Remove(tmpfile.Name())
+
+	store, err := NewSqliteStore(tmpfile.Name())
+	assert.NoError(t, err)
+
+	delayedClock10 := func() time.Time {
+		ts := time.Now()
+		return ts.Add(time.Duration(-10) * time.Minute)
+	}
+	store.(*sqliteStore).sysClock = delayedClock10
+
+	delayedClock5 := func() time.Time {
+		ts := time.Now()
+		return ts.Add(time.Duration(-5) * time.Minute)
+	}
+
+	currentClock := func() time.Time { return time.Now() }
+	var jobIDs []uuid.UUID
+
+	for i := 0; i < 10; i++ {
+		jobID := uuid.New()
+		logs := []*engine.LogEntry{
+			{
+				Step:   "s0",
+				Worker: fmt.Sprintf("w%d", i),
+			},
+		}
+		err = store.Update(jobID, "example-workflow", logs)
+		require.NoError(t, err)
+		jobIDs = append(jobIDs, jobID)
+	}
+
+	for i := 0; i < 10; i++ {
+		if i == 5 {
+			store.(*sqliteStore).sysClock = delayedClock5
+		}
+
+		jobInfo, err := store.GetRunningJobLogs(jobIDs[i])
+		require.NoError(t, err)
+		err = store.OnJobDone(jobIDs[i], "example-workflow", jobInfo.Logs)
+		require.NoError(t, err)
+	}
+
+	store.(*sqliteStore).sysClock = currentClock
+	idList, err := store.ListCompletedJobs("example-workflow", 0)
+	assert.NoError(t, err)
+	require.ElementsMatch(t, jobIDs, idList)
+
+	idList2, err := store.ListCompletedJobs("example-workflow", 12)
+	assert.NoError(t, err)
+	require.ElementsMatch(t, jobIDs, idList2)
+
+	idList3, err := store.ListCompletedJobs("example-workflow", 8)
+	assert.NoError(t, err)
+	require.ElementsMatch(t, jobIDs[5:], idList3)
 }

@@ -90,9 +90,6 @@ func main() {
 		switch {
 		case strings.HasPrefix(opt.Database, "sqlite3:"):
 			filename := opt.Database[len("sqlite3:"):]
-			if strings.HasPrefix(filename, "//") {
-				filename = filename[1:]
-			}
 			storage, err = store.NewSqliteStore(filename)
 			if err != nil {
 				log.Fatal().Err(err)
@@ -111,7 +108,7 @@ func main() {
 		wrkEngine.RecoverRunningJobs()
 	}
 
-	apiServer := api.NewApiServer(wrkEngine)
+	apiServer := api.NewApiServer(wrkEngine, storage)
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/", http.FileServer(http.Dir(opt.HTMLDir)))
 	log.Fatal().Err(http.ListenAndServe(fmt.Sprintf(":%d", opt.Port), mux))

@@ -19,6 +19,7 @@ import (
 const correlationIdSepToken = ":"
 
 var errTaskNop = errors.New("no elements for task")
+var ErrJobUnknown = errors.New("no running job with this id")
 
 // Information returned by ListWorkflows per workflow
 type WorkflowInfo struct {
@@ -692,12 +693,20 @@ func makeStatusEntry(logEntry *LogEntry) JobStatusEntry {
 	}
 }
 
+func LogToStatusEntries(logEntries []*LogEntry) []JobStatusEntry {
+	status := make([]JobStatusEntry, len(logEntries))
+	for i, logEntry := range logEntries {
+		status[i] = makeStatusEntry(logEntry)
+	}
+	return status
+}
+
 func (e *engine) JobStatus(id uuid.UUID) ([]JobStatusEntry, []JobStatusEntry, error) {
 	e.mutex.Lock()
 	job, exists := e.jobs[id]
 	e.mutex.Unlock()
 	if !exists {
-		return nil, nil, fmt.Errorf("unknown job id %v", id)
+		return nil, nil, ErrJobUnknown
 	}
 
 	job.mutex.Lock()

@@ -5,18 +5,21 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/pedro-r-marques/workflow/pkg/engine"
+	"github.com/rs/zerolog/log"
 )
 
 type ApiServer struct {
 	engine engine.WorkflowEngine
+	store  engine.JobStore
 }
 
-func NewApiServer(engine engine.WorkflowEngine) *ApiServer {
-	return &ApiServer{engine: engine}
+func NewApiServer(engine engine.WorkflowEngine, store engine.JobStore) *ApiServer {
+	return &ApiServer{engine: engine, store: store}
 }
 
 // GET /api/workflows
@@ -115,10 +118,27 @@ func (s *ApiServer) listWorkflowJobs(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	response := struct {
-		Jobs []uuid.UUID `json:"jobs"`
+		Running   []uuid.UUID `json:"running,omitempty"`
+		Completed []uuid.UUID `json:"completed,omitempty"`
 	}{
-		Jobs: uuids,
+		Running: uuids,
 	}
+
+	if s.store != nil {
+		// how long to look back in minutes
+		var intervalMins int64 = 60 * 8 // 8h
+		if sinceStr := q.Get("interval"); sinceStr != "" {
+			if v, err := strconv.ParseInt(sinceStr, 10, 32); err == nil {
+				intervalMins = v
+			}
+		}
+		if doneIDs, err := s.store.ListCompletedJobs(name, intervalMins); err == nil {
+			response.Completed = doneIDs
+		} else {
+			log.Error().Err(err)
+		}
+	}
+
 	body, err := json.Marshal(response)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -161,14 +181,26 @@ func (s *ApiServer) getJob(w http.ResponseWriter, req *http.Request) {
 
 	open, closed, err := s.engine.JobStatus(jobID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		if err != engine.ErrJobUnknown {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if s.store == nil {
+			http.Error(w, "job not running", http.StatusBadRequest)
+			return
+		}
+		jobInfo, err := s.store.GetCompletedJobLogs(jobID)
+		if err != nil {
+			http.Error(w, "unknown job id", http.StatusBadRequest)
+			return
+		}
+		closed = engine.LogToStatusEntries(jobInfo.Logs)
 	}
 
 	response := struct {
 		ID     string                  `json:"uuid"`
-		Open   []engine.JobStatusEntry `json:"running"`
-		Closed []engine.JobStatusEntry `json:"completed"`
+		Open   []engine.JobStatusEntry `json:"running,omitempty"`
+		Closed []engine.JobStatusEntry `json:"completed,omitempty"`
 	}{jobID.String(), open, closed}
 	body, err := json.Marshal(response)
 	if err != nil {
