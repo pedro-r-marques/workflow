@@ -3,11 +3,11 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -72,8 +72,8 @@ func TestSimpleStateMachine(t *testing.T) {
 			assert.NoError(t, err)
 		}
 
-		log := <-ch
-		assert.Equal(t, config.WorkflowEnd, log.Step)
+		logEntry := <-ch
+		assert.Equal(t, config.WorkflowEnd, logEntry.Step)
 	}
 }
 
@@ -309,7 +309,7 @@ func (b *echoBus) Run() {
 			break
 		}
 		if err := b.engine.OnEvent(m.correlationId, jsonMustMarshal(m.msg)); err != nil {
-			log.Print(err)
+			log.Error().Err(err)
 		}
 	}
 }
@@ -342,7 +342,7 @@ func TestSubtaskStateMachine(t *testing.T) {
 
 	go mbus.Run()
 
-	log := <-ch
-	assert.Equal(t, config.WorkflowEnd, log.Step)
+	logEntry := <-ch
+	assert.Equal(t, config.WorkflowEnd, logEntry.Step)
 	assert.Len(t, mbus.recvCorrelationIds, 7)
 }

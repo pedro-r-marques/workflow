@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 
 	"github.com/pedro-r-marques/workflow/pkg/config"
 )
@@ -221,6 +221,11 @@ func (e *engine) createTask(job *jobState, nodeName, taskName string, data map[s
 	job.Open = append(job.Open, logEntry)
 	changes.add(logEntry)
 
+	log.Debug().
+		Str("id", job.ID.String()).
+		Str("task", taskName).
+		Msg("create task")
+
 	for i, elementRaw := range jsonElementList {
 		id := taskIDs[i]
 		wstate := job.Workflow.locateTaskState(nodeName, taskName)
@@ -267,7 +272,7 @@ func (e *engine) workflowStart(job *jobState, data map[string]json.RawMessage) e
 
 	if e.store != nil {
 		if err := e.store.Update(job.ID, job.Workflow.Name, changes.logs); err != nil {
-			log.Print(err)
+			log.Error().Err(err)
 		}
 	}
 
@@ -288,6 +293,10 @@ func (e *engine) Create(workflow string, id uuid.UUID, dict map[string]json.RawM
 	if !exists {
 		return fmt.Errorf("unknown workflow: %s", workflow)
 	}
+
+	log.Debug().
+		Str("id", id.String()).
+		Msg("create job")
 
 	job := &jobState{
 		ID:       id,
@@ -369,6 +378,11 @@ func (e *engine) advanceStateLocked(job *jobState, stepName string, changes *cha
 				break
 			}
 
+			log.Debug().
+				Str("id", job.ID.String()).
+				Str("state", node.Name).
+				Msg("advance state")
+
 			if node.Task == "" {
 				log := &LogEntry{
 					Step:  node.Name,
@@ -426,6 +440,10 @@ func (e *engine) completed(job *jobState, data map[string]json.RawMessage, chang
 	}
 
 	changes.clear()
+
+	log.Debug().
+		Str("id", job.ID.String()).
+		Msg("job done")
 
 	if job.Parent != nil {
 		pieces := strings.Split(job.Workflow.Name, "/")
@@ -523,8 +541,13 @@ func (e *engine) maybeTaskEnd(job *jobState, nodeName, taskName string) {
 		return
 	}
 
+	log.Debug().
+		Str("id", job.ID.String()).
+		Str("task", taskName).
+		Msg("task done")
+
 	if err := e.advanceStateLocked(job, nodeName, &changes); err != nil {
-		log.Print(err)
+		log.Error().Err(err)
 	}
 	if e.store != nil && !changes.isEmpty() {
 		e.store.Update(job.ID, job.Workflow.Name, changes.logs)
@@ -596,7 +619,7 @@ func (e *engine) OnEvent(correlationId string, body []byte) error {
 
 	if e.store != nil && !changes.isEmpty() {
 		if err := e.store.Update(job.ID, job.Workflow.Name, changes.logs); err != nil {
-			log.Print(err)
+			log.Error().Err(err)
 		}
 	}
 
@@ -718,7 +741,7 @@ func getJobTaskCreateData(job *jobState, taskName string, logEntry *LogEntry) ([
 	return jsonElementList, nil
 }
 
-func (e *engine) recreateTask(job *jobState, stepName, taskName string, jsonElementList []json.RawMessage, ix int, tid uuid.UUID) error {
+func (e *engine) recreateTaskJob(job *jobState, stepName, taskName string, jsonElementList []json.RawMessage, ix int, tid uuid.UUID) error {
 	wstate := job.Workflow.locateTaskState(stepName, taskName)
 
 	data, err := json.Marshal(jsonElementList[ix])
@@ -743,13 +766,21 @@ func (e *engine) recreateTask(job *jobState, stepName, taskName string, jsonElem
 		Parent: job,
 	}
 	e.jobs[tid] = task
+
+	log.Info().
+		Str("id", job.ID.String()).
+		Str("taskJob", tid.String()).
+		Msg("task job recreate")
+
+	e.store.Update(tid, task.Workflow.Name, []*LogEntry{logEntry})
+
 	wstate.onJobCreate(task)
 	return nil
 }
 
 // recover a task based on storage logs
 // the task may be either running or terminated
-func (e *engine) recoverTask(job *jobState, stepName, taskName string, taskInfo *JobLogInfo) error {
+func (e *engine) recoverTaskJob(job *jobState, stepName, taskName string, taskInfo *JobLogInfo) error {
 	wstate := job.Workflow.locateTaskState(stepName, taskName)
 	var open []*LogEntry
 	closed := make(map[string]*LogEntry, len(taskInfo.Logs))
@@ -801,6 +832,10 @@ func (e *engine) RecoverRunningJobs() error {
 			Closed:   make(map[string]*LogEntry),
 		}
 
+		log.Info().
+			Str("id", job.ID.String()).
+			Msg("job recover")
+
 		for _, l := range ji.Logs {
 			if l.End.IsZero() {
 				job.Open = append(job.Open, l)
@@ -811,7 +846,7 @@ func (e *engine) RecoverRunningJobs() error {
 
 			taskName, err := getJobStepTaskName(job, l)
 			if err != nil {
-				log.Print(err)
+				log.Error().Err(err)
 				continue
 			}
 			if taskName == "" {
@@ -822,12 +857,22 @@ func (e *engine) RecoverRunningJobs() error {
 			// read in completed tasks that we may depend on
 			for ix, tid := range l.Children {
 				if jobInfo, inMap := jobInfoByID[tid]; inMap {
-					e.recoverTask(job, l.Step, taskName, jobInfo)
+					log.Debug().
+						Str("id", job.ID.String()).
+						Str("taskJob", tid.String()).
+						Msg("recover running task")
+
+					e.recoverTaskJob(job, l.Step, taskName, jobInfo)
 					continue
 				}
 				// restore from storage log.
 				if jobInfo, err := e.store.GetCompletedJobLogs(tid); err == nil {
-					e.recoverTask(job, l.Step, taskName, jobInfo)
+					log.Debug().
+						Str("id", job.ID.String()).
+						Str("taskJob", tid.String()).
+						Msg("recover completed task")
+
+					e.recoverTaskJob(job, l.Step, taskName, jobInfo)
 					continue
 				}
 
@@ -835,11 +880,11 @@ func (e *engine) RecoverRunningJobs() error {
 				if jsonElementList == nil {
 					jsonElementList, err = getJobTaskCreateData(job, taskName, l)
 					if err != nil {
-						log.Print(err)
+						log.Error().Err(err)
 						continue
 					}
 				}
-				e.recreateTask(job, l.Step, taskName, jsonElementList, ix, tid)
+				e.recreateTaskJob(job, l.Step, taskName, jsonElementList, ix, tid)
 			}
 			taskIDs = append(taskIDs, l.Children...)
 		}
@@ -858,7 +903,7 @@ func (e *engine) RecoverRunningJobs() error {
 	for _, tid := range taskIDs {
 		task, exists := e.jobs[tid]
 		if !exists {
-			log.Printf("unable to recover task %v", tid)
+			log.Error().Msgf("unable to recover task %v", tid)
 			continue
 		}
 		var nopChanges changeList
