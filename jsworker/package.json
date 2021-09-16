@@ -1,0 +1,40 @@
+{
+  "name": "jsworker",
+  "version": "0.0.1",
+  "description": "Javascript workflow-manager worker library",
+  "main": "build/index.js",
+  "scripts": {
+    "build": "tsc",
+    "compile": "tsc",
+    "pretest": "tsc --project tsconfig.test.json",
+    "test": "mocha",
+    "lint": "gts lint",
+    "clean": "gts clean",
+    "fix": "gts fix",
+    "prepare": "npm run compile",
+    "posttest": "npm run lint"
+  },
+  "author": "pedro.r.marques@gmail.com",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "amqplib": "^0.8.0"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.8.2",
+    "@types/mocha": "^9.0.0",
+    "@types/node": "^16.9.1",
+    "@typescript-eslint/eslint-plugin": "^4.31.1",
+    "@typescript-eslint/parser": "^4.31.1",
+    "eslint": "^7.32.0",
+    "eslint-config-google": "^0.14.0",
+    "gts": "^3.1.0",
+    "mocha": "^9.0.3",
+    "typescript": "^4.4.3"
+  },
+  "mocha": {
+    "extension": [
+      "js"
+    ],
+    "spec": "build/**/*.spec.js"
+  }
+}
