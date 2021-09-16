@@ -55,6 +55,30 @@ jobs:
     - name: Install pyworker
       run: pip install .
     
-    - name: Integration tests
+    - name: Set up node
+      uses: actions/setup-node@v2
+      with:
+        node-version: 16.x
+
+    - name: jsworker package
+      working-directory: jsworker
+      run: |
+        npm ci
+        npm run compile
+        AMQP_SERVER="amqp://guest:guest@localhost:5672/" npm run test
+        npm pack
+
+    - name: node examples package
+      working-directory: examples/word-counts-js
+      run: |
+        npm ci
+        npm run compile
+        npm run lint
+
+    - name: Integration tests (python)
       run: |
         bash examples/word-counts/test.sh
+
+    - name: Integration tests (nodejs + python)
+      run: |
+        bash examples/word-counts-js/test.sh
